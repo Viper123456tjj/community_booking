@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<!--
+  管理端 · 师傅管理（Batch 5）
+  ---------------------------------------------------------------------
+  本页把"人"和"岗"分开管：
+    1. 师傅档案：读 GET /api/admin/worker/page，写 PUT /api/admin/worker
+       —— 只维护技能标签与接单状态，账号本身（姓名/手机/启用）在账号页；
+    2. 账号管理：读 GET /api/admin/user/page，写 POST /api/admin/user、DELETE /api/admin/user/{id}
+       —— 新增 ROLE_WORKER 账号时后端自动联动建档案（默认技能），
+          因此"先建账号再调技能"是唯一正确顺序，页面在提示区写明。
+  接单状态里的"忙碌(2)"由订单状态机联动置位，管理员只能置"空闲/休息"，
+  这一约束在后端 WorkerProfileServiceImpl 已拦截，前端下拉不提供忙碌项。
+-->
+<head th:replace="~{fragments/layout :: head('师傅管理')}"></head>
+<body>
+<div class="app-shell">
+    <aside th:replace="~{fragments/layout :: sidebar('workers')}"></aside>
+    <div class="app-body">
+        <nav th:replace="~{fragments/layout :: topbar('师傅管理')}"></nav>
+
+        <main class="app-main">
+            <!-- 页签：师傅档案 / 账号管理 -->
+            <ul class="nav nav-tabs mb-3" id="workerTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#paneProfiles"
+                            type="button" role="tab">
+                        <i class="bi bi-person-badge"></i> 师傅档案
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#paneAccounts"
+                            type="button" role="tab">
+                        <i class="bi bi-people"></i> 账号管理
+                    </button>
+                </li>
+            </ul>
+
+            <div class="tab-content">
+                <!-- ==================== 1. 师傅档案 ==================== -->
+                <div class="tab-pane fade show active" id="paneProfiles" role="tabpanel">
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <div class="toolbar">
+                                <select class="form-select form-select-sm" id="workStatusFilter" style="min-width:140px;">
+                                    <option value="">全部接单状态</option>
+                                    <option value="1">空闲</option>
+                                    <option value="2">忙碌</option>
+                                    <option value="0">休息中</option>
+                                </select>
+                                <input type="text" class="form-control form-control-sm" id="workerKw"
+                                       placeholder="姓名 / 账号 / 技能" style="min-width:200px;">
+                                <button class="btn btn-sm btn-primary" id="workerSearchBtn">
+                                    <i class="bi bi-search"></i> 查询
+                                </button>
+                                <button class="btn btn-sm btn-light" id="workerResetBtn">
+                                    <i class="bi bi-arrow-counterclockwise"></i> 重置
+                                </button>
+                            </div>
+                            <div class="form-text mt-2">
+                                技能标签决定智能派单的匹配度：标签未覆盖项目所需技能的师傅会以"技能不匹配"沉底。
+                                接单状态为"忙碌"时该师傅暂不进入候选池，需等在手订单完成或改派后由系统自动释放。
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <span>师傅档案</span>
+                            <span class="sub" id="workerHint">加载中…</span>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle">
+                                <thead>
+                                <tr>
+                                    <th style="width:140px;">师傅</th>
+                                    <th>技能标签</th>
+                                    <th style="width:116px;">接单状态</th>
+                                    <th style="width:120px;">评分 / 单量</th>
+                                    <th style="width:110px;">在手 / 累计</th>
+                                    <th style="width:132px;">联系方式</th>
+                                    <th style="width:96px;">操作</th>
+                                </tr>
+                                </thead>
+                                <tbody id="workerBody">
+                                <tr><td colspan="7"><div class="empty-hint"><i class="bi bi-hourglass-split"></i>加载中…</div></td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="cm-pager" id="workerPager"></div>
+                    </div>
+                </div>
+
+                <!-- ==================== 2. 账号管理 ==================== -->
+                <div class="tab-pane fade" id="paneAccounts" role="tabpanel">
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <div class="toolbar">
+                                <select class="form-select form-select-sm" id="roleFilter" style="min-width:140px;">
+                                    <option value="">全部角色</option>
+                                    <option value="ROLE_RESIDENT">社区居民</option>
+                                    <option value="ROLE_WORKER">服务人员</option>
+                                    <option value="ROLE_ADMIN">物业管理员</option>
+                                </select>
+                                <select class="form-select form-select-sm" id="statusFilter" style="min-width:120px;">
+                                    <option value="">全部状态</option>
+                                    <option value="1">正常</option>
+                                    <option value="0">禁用</option>
+                                </select>
+                                <input type="text" class="form-control form-control-sm" id="userKw"
+                                       placeholder="用户名 / 姓名 / 手机" style="min-width:200px;">
+                                <button class="btn btn-sm btn-primary" id="userSearchBtn">
+                                    <i class="bi bi-search"></i> 查询
+                                </button>
+                                <button class="btn btn-sm btn-light" id="userResetBtn">
+                                    <i class="bi bi-arrow-counterclockwise"></i> 重置
+                                </button>
+                                <button class="btn btn-sm btn-success ms-auto" id="addUserBtn">
+                                    <i class="bi bi-plus-lg"></i> 新增账号
+                                </button>
+                            </div>
+                            <div class="form-text mt-2">
+                                新增"服务人员"账号时系统会自动创建档案并写入默认技能（水电维修、家电维修），
+                                请新增后回到"师傅档案"页签补齐真实技能，否则该师傅只能接到默认技能类的工单。
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <span>账号列表</span>
+                            <span class="sub" id="userHint">加载中…</span>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle">
+                                <thead>
+                                <tr>
+                                    <th style="width:170px;">登录账号</th>
+                                    <th style="width:110px;">姓名</th>
+                                    <th style="width:120px;">角色</th>
+                                    <th style="width:130px;">手机</th>
+                                    <th>邮箱 / 地址</th>
+                                    <th style="width:86px;">状态</th>
+                                    <th style="width:126px;">创建时间</th>
+                                    <th style="width:130px;">操作</th>
+                                </tr>
+                                </thead>
+                                <tbody id="userBody">
+                                <tr><td colspan="8"><div class="empty-hint"><i class="bi bi-hourglass-split"></i>加载中…</div></td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="cm-pager" id="userPager"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </div>
+</div>
+
+<!-- ==================== 师傅档案编辑弹窗 ==================== -->
+<div class="modal fade" id="profileModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">维护师傅档案 · <span id="profileWho">-</span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="profileForm" novalidate>
+                    <input type="hidden" id="pUserId">
+                    <div class="mb-3">
+                        <label class="form-label">技能标签 <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="pSkillTags" maxlength="255" list="skillOptions"
+                               placeholder="多个标签用 | 分隔，如：水电维修|管道疏通" required>
+                        <datalist id="skillOptions"></datalist>
+                        <div class="form-text">管理员代管可自由录入，但只有与服务项目所需技能一致的标签才会命中派单。</div>
+                        <div class="chip-row mt-2" id="pVocab"></div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">接单状态</label>
+                        <select class="form-select" id="pWorkStatus">
+                            <option value="1">空闲（可接新单）</option>
+                            <option value="0">休息（暂停派单）</option>
+                            <option value="2" disabled>忙碌（由系统按在手订单自动置位）</option>
+                        </select>
+                        <div class="form-text">仍有在手订单时不允许切到"休息"，请先完成或改派该师傅的工单。</div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="saveProfileBtn">保存档案</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== 账号新增/编辑弹窗 ==================== -->
+<div class="modal fade" id="userModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="userModalTitle">新增账号</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="userForm" novalidate>
+                    <input type="hidden" id="uId">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">登录用户名 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="uUsername" maxlength="32" required
+                                   placeholder="3-32 位字母开头的字母/数字/下划线">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">真实姓名 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="uRealName" maxlength="32" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">登录密码</label>
+                            <input type="password" class="form-control" id="uPassword" maxlength="32"
+                                   placeholder="新增留空则初始密码 123456" autocomplete="new-password">
+                            <div class="form-text" id="pwdHint">新增留空则使用初始密码 123456。</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">角色 <span class="text-danger">*</span></label>
+                            <select class="form-select" id="uRole">
+                                <option value="ROLE_RESIDENT">社区居民</option>
+                                <option value="ROLE_WORKER">服务人员</option>
+                                <option value="ROLE_ADMIN">物业管理员</option>
+                            </select>
+                            <div class="form-text d-none" id="roleLockHint">
+                                已有业务轨迹的账号不允许变更角色，故编辑时不开放此项。
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">手机号</label>
+                            <input type="text" class="form-control" id="uPhone" maxlength="11"
+                                   placeholder="11 位手机号，可留空">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">邮箱 <span class="text-danger">*</span></label>
+                            <input type="email" class="form-control" id="uEmail" maxlength="64" required
+                                   placeholder="用于接收派单/取消通知邮件">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">服务地址</label>
+                            <input type="text" class="form-control" id="uAddress" maxlength="128"
+                                   placeholder="楼栋门牌，如：康顺社区7号楼1单元102">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">账号状态</label>
+                            <select class="form-select" id="uStatus">
+                                <option value="1">正常</option>
+                                <option value="0">禁用（不可登录、不可派单）</option>
+                            </select>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="saveUserBtn">保存账号</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script th:inline="none">
+    $(function () {
+        /* ==================== 公共状态 ==================== */
+        var workerState = { pageNum: 1, pageSize: 10, workStatus: null, keyword: '' };
+        var userState = { pageNum: 1, pageSize: 10, role: '', status: null, keyword: '' };
+        /* 技能词表：从全量服务项目的 skill_required 里现取（后端没有独立词表接口，
+           这里用一页 100 条的上限足够覆盖教学数据的标签空间；管理员代管允许自由录入，
+           因此词表只作为"点选辅助"而非强校验） */
+        var skillVocab = [];
+
+        var profileModal = new bootstrap.Modal(document.getElementById('profileModal'));
+        var userModal = new bootstrap.Modal(document.getElementById('userModal'));
+        var editingUserId = null;
+
+        /* ==================== 1. 师傅档案：列表 ==================== */
+        function workStatusBadge(status) {
+            if (status === 1) {
+                return '<span class="badge-soft st-3">空闲</span>';
+            }
+            if (status === 2) {
+                return '<span class="badge-soft st-1">忙碌</span>';
+            }
+            return '<span class="badge-soft st-4">休息中</span>';
+        }
+
+        function skillTagsHtml(vo) {
+            var tags = vo.skillTagsList || [];
+            if (!tags.length) {
+                return '<span style="color:#a5b5b0;">未配置技能</span>';
+            }
+            var html = '';
+            tags.forEach(function (t) {
+                html += '<span class="tag">' + CM.escapeHtml(t) + '</span>';
+            });
+            return html;
+        }
+
+        function renderWorkers(page) {
+            var rows = page.records || [];
+            $('#workerHint').text('共 ' + (page.total || 0) + ' 位师傅');
+            if (!rows.length) {
+                $('#workerBody').html('<tr><td colspan="7"><div class="empty-hint">'
+                    + '<i class="bi bi-person-x"></i>没有符合条件的师傅</div></td></tr>');
+                return;
+            }
+            var html = '';
+            rows.forEach(function (w) {
+                html += ''
+                    + '<tr>'
+                    + '  <td><div style="font-weight:600;">' + CM.escapeHtml(w.realName || '-') + '</div>'
+                    + '      <div style="font-size:11px;color:#8ba09a;">' + CM.escapeHtml(w.username || '') + '</div></td>'
+                    + '  <td>' + skillTagsHtml(w) + '</td>'
+                    + '  <td>' + workStatusBadge(w.workStatus) + '</td>'
+                    + '  <td><span style="color:#c98a1b;font-weight:600;">★ '
+                    + CM.money(w.ratingScore) + '</span></td>'
+                    + '  <td style="font-size:12px;">'
+                    + (w.activeOrders || 0) + ' 单在手 / ' + (w.totalOrders || 0) + ' 单累计</td>'
+                    + '  <td style="font-size:12px;">' + CM.escapeHtml(w.phone || '-') + '</td>'
+                    + '  <td><button class="btn btn-sm btn-outline-primary" data-edit-worker="'
+                    + w.userId + '">维护</button></td>'
+                    + '</tr>';
+            });
+            $('#workerBody').html(html);
+        }
+
+        function loadWorkers() {
+            CM.get('/api/admin/worker/page', {
+                pageNum: workerState.pageNum,
+                pageSize: workerState.pageSize,
+                workStatus: workerState.workStatus,
+                keyword: workerState.keyword
+            }).then(function (page) {
+                renderWorkers(page);
+                CM.pager($('#workerPager'), page, function (go) {
+                    workerState.pageNum = go;
+                    loadWorkers();
+                });
+            }).catch(CM.alertError);
+        }
+
+        $('#workerSearchBtn').on('click', function () {
+            var ws = $('#workStatusFilter').val();
+            workerState.workStatus = ws === '' ? null : Number(ws);
+            workerState.keyword = $.trim($('#workerKw').val());
+            workerState.pageNum = 1;
+            loadWorkers();
+        });
+        $('#workerKw').on('keydown', function (e) {
+            if (e.key === 'Enter') {
+                $('#workerSearchBtn').click();
+            }
+        });
+        $('#workerResetBtn').on('click', function () {
+            $('#workStatusFilter').val('');
+            $('#workerKw').val('');
+            workerState.workStatus = null;
+            workerState.keyword = '';
+            workerState.pageNum = 1;
+            loadWorkers();
+        });
+
+        /* ==================== 2. 师傅档案：编辑 ==================== */
+        function renderProfileVocab() {
+            if (!skillVocab.length) {
+                $('#pVocab').html('<span style="font-size:12px;color:#a5b5b0;">暂无可点选标签，请手工输入</span>');
+                return;
+            }
+            var html = '';
+            skillVocab.forEach(function (t) {
+                html += '<span class="tag" style="cursor:pointer;" data-pvocab="'
+                    + CM.escapeHtml(t) + '">+ ' + CM.escapeHtml(t) + '</span>';
+            });
+            $('#pVocab').html(html);
+        }
+
+        $('#pVocab').on('click', '[data-pvocab]', function () {
+            var tag = String($(this).data('pvocab'));
+            var raw = $.trim($('#pSkillTags').val());
+            var parts = raw ? raw.split('|') : [];
+            if (parts.indexOf(tag) >= 0) {
+                return;
+            }
+            parts.push(tag);
+            $('#pSkillTags').val(parts.join('|'));
+        });
+
+        $('#workerBody').on('click', '[data-edit-worker]', function () {
+            var userId = Number($(this).data('edit-worker'));
+            CM.get('/api/admin/worker/' + userId).then(function (vo) {
+                editingUserId = userId;
+                $('#profileWho').text((vo.realName || vo.username || '') + '（' + (vo.username || '') + '）');
+                $('#pUserId').val(userId);
+                $('#pSkillTags').val(vo.skillTags || '');
+                /* 忙碌(2) 由系统维护：编辑时仍展示真实值，但保存只允许空闲/休息 */
+                $('#pWorkStatus').val(vo.workStatus === 0 ? '0' : '1');
+                renderProfileVocab();
+                profileModal.show();
+            }).catch(CM.alertError);
+        });
+
+        $('#saveProfileBtn').on('click', function () {
+            var tags = $.trim($('#pSkillTags').val());
+            if (!tags) {
+                CM.toast('技能标签不能为空，否则该师傅无法命中任何派单', 'error');
+                return;
+            }
+            var payload = {
+                userId: Number($('#pUserId').val()),
+                skillTags: tags,
+                workStatus: Number($('#pWorkStatus').val())
+            };
+            var $btn = $(this).prop('disabled', true);
+            CM.put('/api/admin/worker', payload)
+                .then(function () {
+                    profileModal.hide();
+                    CM.toast('师傅档案已更新', 'success');
+                    loadWorkers();
+                })
+                .catch(CM.alertError)
+                .finally(function () {
+                    $btn.prop('disabled', false);
+                });
+        });
+
+        /* ==================== 3. 账号管理：列表 ==================== */
+        function statusBadge(status) {
+            return status === 1
+                ? '<span class="badge-soft st-3">正常</span>'
+                : '<span class="badge-soft st-4">已禁用</span>';
+        }
+
+        function renderUsers(page) {
+            var rows = page.records || [];
+            $('#userHint').text('共 ' + (page.total || 0) + ' 个账号');
+            if (!rows.length) {
+                $('#userBody').html('<tr><td colspan="8"><div class="empty-hint">'
+                    + '<i class="bi bi-person-x"></i>没有符合条件的账号</div></td></tr>');
+                return;
+            }
+            var html = '';
+            rows.forEach(function (u) {
+                html += ''
+                    + '<tr>'
+                    + '  <td><span style="font-family:Consolas,monospace;font-size:12px;">'
+                    + CM.escapeHtml(u.username) + '</span></td>'
+                    + '  <td>' + CM.escapeHtml(u.realName || '-') + '</td>'
+                    + '  <td>' + CM.roleBadge(u.role) + '</td>'
+                    + '  <td style="font-size:12px;">' + CM.escapeHtml(u.phone || '-') + '</td>'
+                    + '  <td style="font-size:12px;line-height:1.6;">' + CM.escapeHtml(u.email || '-')
+                    + '<div style="color:#8ba09a;">' + CM.escapeHtml(u.address || '') + '</div></td>'
+                    + '  <td>' + statusBadge(u.status) + '</td>'
+                    + '  <td style="font-size:12px;">' + CM.fmtDate(u.createTime) + '</td>'
+                    + '  <td><div class="op-btns">'
+                    + '    <button class="btn btn-sm btn-outline-primary" data-edit-user="' + u.id + '">编辑</button>'
+                    + '    <button class="btn btn-sm btn-outline-danger" data-del-user="' + u.id
+                    + '" data-user-name="' + CM.escapeHtml(u.username) + '">删除</button>'
+                    + '  </div></td>'
+                    + '</tr>';
+            });
+            $('#userBody').html(html);
+        }
+
+        function loadUsers() {
+            CM.get('/api/admin/user/page', {
+                pageNum: userState.pageNum,
+                pageSize: userState.pageSize,
+                role: userState.role || null,
+                status: userState.status,
+                keyword: userState.keyword
+            }).then(function (page) {
+                renderUsers(page);
+                CM.pager($('#userPager'), page, function (go) {
+                    userState.pageNum = go;
+                    loadUsers();
+                });
+            }).catch(CM.alertError);
+        }
+
+        $('#userSearchBtn').on('click', function () {
+            var st = $('#statusFilter').val();
+            userState.role = $('#roleFilter').val();
+            userState.status = st === '' ? null : Number(st);
+            userState.keyword = $.trim($('#userKw').val());
+            userState.pageNum = 1;
+            loadUsers();
+        });
+        $('#userKw').on('keydown', function (e) {
+            if (e.key === 'Enter') {
+                $('#userSearchBtn').click();
+            }
+        });
+        $('#userResetBtn').on('click', function () {
+            $('#roleFilter').val('');
+            $('#statusFilter').val('');
+            $('#userKw').val('');
+            userState.role = '';
+            userState.status = null;
+            userState.keyword = '';
+            userState.pageNum = 1;
+            loadUsers();
+        });
+
+        /* ==================== 4. 账号管理：新增 / 编辑 / 删除 ==================== */
+        function clearUserForm() {
+            $('#uId').val('');
+            $('#uUsername').val('').prop('disabled', false);
+            $('#uRealName').val('');
+            $('#uPassword').val('');
+            $('#uPhone').val('');
+            $('#uEmail').val('');
+            $('#uAddress').val('');
+            $('#uRole').val('ROLE_RESIDENT').prop('disabled', false);
+            $('#uStatus').val('1');
+            $('#roleLockHint').addClass('d-none');
+            $('#pwdHint').text('新增留空则使用初始密码 123456。');
+        }
+
+        $('#addUserBtn').on('click', function () {
+            clearUserForm();
+            editingUserId = null;
+            $('#userModalTitle').text('新增账号');
+            userModal.show();
+        });
+
+        $('#userBody').on('click', '[data-edit-user]', function () {
+            var id = Number($(this).data('edit-user'));
+            /* 账号没有独立详情接口（列表已回全字段），按 id 现查一页并匹配，
+               避免为"读一条记录"新造一个与列表重复的接口 */
+            CM.get('/api/admin/user/page', { pageNum: 1, pageSize: 100 }).then(function (page) {
+                var target = (page.records || []).filter(function (u) {
+                    return u.id === id;
+                })[0];
+                if (!target) {
+                    CM.toast('账号不存在或已被删除', 'error');
+                    return;
+                }
+                clearUserForm();
+                editingUserId = id;
+                $('#userModalTitle').text('编辑账号 · ' + target.username);
+                $('#uId').val(target.id);
+                $('#uUsername').val(target.username).prop('disabled', true);
+                $('#uRealName').val(target.realName || '');
+                $('#uPhone').val(target.phone || '');
+                $('#uEmail').val(target.email || '');
+                $('#uAddress').val(target.address || '');
+                $('#uRole').val(target.role).prop('disabled', true);
+                $('#uStatus').val(String(target.status));
+                $('#roleLockHint').removeClass('d-none');
+                $('#pwdHint').text('留空表示不修改密码。');
+                userModal.show();
+            }).catch(CM.alertError);
+        });
+
+        $('#saveUserBtn').on('click', function () {
+            var username = $.trim($('#uUsername').val());
+            var realName = $.trim($('#uRealName').val());
+            var email = $.trim($('#uEmail').val());
+            if (!username || !realName || !email) {
+                CM.toast('用户名、姓名、邮箱为必填项', 'error');
+                return;
+            }
+            var payload = {
+                id: editingUserId,
+                username: username,
+                password: $.trim($('#uPassword').val()),
+                realName: realName,
+                phone: $.trim($('#uPhone').val()),
+                email: email,
+                address: $.trim($('#uAddress').val()),
+                role: $('#uRole').prop('disabled') ? null : $('#uRole').val(),
+                status: Number($('#uStatus').val())
+            };
+            var $btn = $(this).prop('disabled', true);
+            CM.post('/api/admin/user', payload)
+                .then(function () {
+                    userModal.hide();
+                    CM.toast(editingUserId ? '账号已更新' : '账号已创建', 'success');
+                    loadUsers();
+                    /* 新增师傅会联动建档案，顺手刷新档案页签的数据 */
+                    if (payload.role === 'ROLE_WORKER') {
+                        loadWorkers();
+                    }
+                })
+                .catch(CM.alertError)
+                .finally(function () {
+                    $btn.prop('disabled', false);
+                });
+        });
+
+        $('#userBody').on('click', '[data-del-user]', function () {
+            var id = Number($(this).data('del-user'));
+            var name = String($(this).data('user-name') || '');
+            CM.confirm('确认删除账号「' + name + '」？仅当该账号没有任何订单、评价与在途工单时才允许删除。', '确认删除')
+                .then(function (ok) {
+                    if (!ok) {
+                        return;
+                    }
+                    CM.del('/api/admin/user/' + id).then(function () {
+                        CM.toast('账号已删除', 'success');
+                        loadUsers();
+                        loadWorkers();
+                    }).catch(CM.alertError);
+                });
+        });
+
+        /* ==================== 5. 初始化 ==================== */
+        /* 技能词表：抓一页服务项目，收集 skill_required 去重（只作点选辅助） */
+        CM.get('/api/admin/item/page', { pageNum: 1, pageSize: 100 }, { silent: true })
+            .then(function (page) {
+                var set = {};
+                (page.records || []).forEach(function (it) {
+                    String(it.skillRequired || '').split('|').forEach(function (t) {
+                        var v = $.trim(t);
+                        if (v) {
+                            set[v] = true;
+                        }
+                    });
+                });
+                skillVocab = Object.keys(set);
+                var options = '';
+                skillVocab.forEach(function (t) {
+                    options += '<option value="' + CM.escapeHtml(t) + '"></option>';
+                });
+                $('#skillOptions').html(options);
+            })
+            .catch(function () {
+                /* 词表只是辅助，取不到也不阻断档案维护 */
+            });
+
+        CM.loadMe().then(function () {
+            loadWorkers();
+            loadUsers();
+        }).catch(function () {
+        });
+    });
+</script>
+</body>
+</html>

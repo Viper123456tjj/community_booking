@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<!--
+  师傅端 · 我的评价（Batch 5）
+  读：GET /api/common/evaluations（师傅视角由后端注入 workerId，只能看到自己的评价）
+-->
+<head th:replace="~{fragments/layout :: head('我的评价')}"></head>
+<body>
+<div class="app-shell">
+    <aside th:replace="~{fragments/layout :: sidebar('evaluations')}"></aside>
+    <div class="app-body">
+        <nav th:replace="~{fragments/layout :: topbar('我的评价')}"></nav>
+
+        <main class="app-main">
+            <div class="card">
+                <div class="card-header">
+                    <div class="toolbar">
+                        <span class="chip active" data-star="">全部星级</span>
+                        <span class="chip" data-star="5">5 星</span>
+                        <span class="chip" data-star="4">4 星</span>
+                        <span class="chip" data-star="3">3 星</span>
+                        <span class="chip" data-star="2">2 星</span>
+                        <span class="chip" data-star="1">1 星</span>
+                    </div>
+                    <span class="sub" id="evalHint">加载中…</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                        <tr>
+                            <th style="width:160px;">订单号</th>
+                            <th>服务项目</th>
+                            <th style="width:120px;">居民</th>
+                            <th style="width:130px;">评分</th>
+                            <th>评价内容</th>
+                            <th style="width:140px;">评价时间</th>
+                        </tr>
+                        </thead>
+                        <tbody id="evalBody">
+                        <tr><td colspan="6"><div class="empty-hint"><i class="bi bi-hourglass-split"></i>加载中…</div></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="cm-pager" id="evalPager"></div>
+            </div>
+        </main>
+
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </div>
+</div>
+
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script th:inline="none">
+    $(function () {
+        var state = { pageNum: 1, pageSize: 10, star: null };
+
+        function starHtml(n) {
+            var html = '';
+            for (var i = 1; i <= 5; i++) {
+                html += '<i class="bi ' + (i <= n ? 'bi-star-fill' : 'bi-star') + '"></i>';
+            }
+            return '<span style="color:#e8a33d;font-size:14px;">' + html
+                + '</span> <span style="font-size:12px;color:#6b7d78;">' + n + '.0</span>';
+        }
+
+        function loadEvaluations() {
+            CM.get('/api/common/evaluations', {
+                pageNum: state.pageNum,
+                pageSize: state.pageSize,
+                star: state.star
+            }).then(function (page) {
+                var rows = page.records || [];
+                $('#evalHint').text('共收到 ' + (page.total || 0) + ' 条评价');
+                // 分页条随数据一起刷新（total/pages 均来自后端 PageVO）
+                CM.pager($('#evalPager'), page, function (go) {
+                    state.pageNum = go;
+                    loadEvaluations();
+                });
+                if (!rows.length) {
+                    $('#evalBody').html('<tr><td colspan="6"><div class="empty-hint">'
+                        + '<i class="bi bi-chat-square-heart"></i>还没有收到评价，完成工单后居民即可评价</div></td></tr>');
+                    return;
+                }
+                var html = '';
+                rows.forEach(function (e) {
+                    html += ''
+                        + '<tr>'
+                        + '  <td><span style="font-family:Consolas,monospace;font-size:12px;">'
+                        + CM.escapeHtml(e.orderNo) + '</span></td>'
+                        + '  <td>' + CM.escapeHtml(e.serviceItemName) + '</td>'
+                        + '  <td>' + CM.escapeHtml(e.residentName || '-') + '</td>'
+                        + '  <td>' + starHtml(e.star) + '</td>'
+                        + '  <td style="font-size:12px;color:#52645f;line-height:1.7;">'
+                        + CM.escapeHtml(e.comment || '（未填写评价内容）') + '</td>'
+                        + '  <td style="font-size:12px;">' + CM.fmtTime(e.createTime) + '</td>'
+                        + '</tr>';
+                });
+                $('#evalBody').html(html);
+            });
+        }
+
+        $('.toolbar .chip').on('click', function () {
+            $('.toolbar .chip').removeClass('active');
+            $(this).addClass('active');
+            var v = $(this).data('star');
+            state.star = v === '' ? null : Number(v);
+            state.pageNum = 1;
+            loadEvaluations();
+        });
+
+        CM.loadMe().then(function () {
+            loadEvaluations();
+        }).catch(function () {
+        });
+    });
+</script>
+</body>
+</html>

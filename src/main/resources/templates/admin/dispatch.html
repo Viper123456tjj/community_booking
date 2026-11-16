@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<!--
+  管理端 · 派单中心（Batch 5，本系统核心页面）
+  读：GET /api/common/orders（全量，按状态筛选）
+      GET /api/admin/dispatch/candidates/{orderId}（多维权重评分后的候选列表）
+  写：POST /api/admin/dispatch/auto/{orderId}（一键指派最优）
+      POST /api/admin/dispatch/assign（人工指派 MANUAL）
+      POST /api/admin/dispatch/reassign（改派）
+      PUT  /api/admin/dispatch/order/{id}/cancel（运营取消）
+-->
+<head th:replace="~{fragments/layout :: head('派单中心')}"></head>
+<body>
+<div class="app-shell">
+    <aside th:replace="~{fragments/layout :: sidebar('dispatch')}"></aside>
+    <div class="app-body">
+        <nav th:replace="~{fragments/layout :: topbar('派单中心')}"></nav>
+
+        <main class="app-main">
+            <div class="row g-3 mb-3">
+                <div class="col-md-4">
+                    <div class="stat-card warn">
+                        <div class="label">待派单订单</div>
+                        <div class="value" id="kpiPending">-</div>
+                        <div class="icon"><i class="bi bi-hourglass-split"></i></div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="stat-card">
+                        <div class="label">已派单未开工</div>
+                        <div class="value" id="kpiDispatched">-</div>
+                        <div class="icon"><i class="bi bi-send-check"></i></div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="stat-card accent">
+                        <div class="label">派单规则</div>
+                        <div style="font-size:12px;color:#52645f;line-height:1.9;margin-top:2px;">
+                            技能覆盖 40 + 空闲 20 + 评分 20 + 负载 15 + 经验均衡 5，
+                            时段冲突每单 −10（最多 −30）
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="toolbar">
+                        <span class="chip active" data-status="0">待派单</span>
+                        <span class="chip" data-status="1">已派单（可改派）</span>
+                    </div>
+                    <div class="toolbar">
+                        <input type="text" class="form-control form-control-sm" id="kwInput"
+                               placeholder="订单号 / 项目 / 居民">
+                        <button class="btn btn-sm btn-outline-primary" id="searchBtn">
+                            <i class="bi bi-search"></i> 查询
+                        </button>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                        <tr>
+                            <th style="width:160px;">订单号</th>
+                            <th>服务项目 / 所需技能</th>
+                            <th style="width:130px;">预约上门</th>
+                            <th>居民 / 地址</th>
+                            <th style="width:90px;">金额</th>
+                            <th style="width:130px;">状态</th>
+                            <th style="width:210px;">操作</th>
+                        </tr>
+                        </thead>
+                        <tbody id="orderBody">
+                        <tr><td colspan="7"><div class="empty-hint"><i class="bi bi-hourglass-split"></i>加载中…</div></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="cm-pager" id="orderPager"></div>
+            </div>
+        </main>
+
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </div>
+</div>
+
+<!-- ============ 智能派单候选弹窗 ============ -->
+<div class="modal fade" id="candidateModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h5 class="modal-title">智能派单 · 候选师傅评分</h5>
+                    <div style="font-size:12px;color:#8ba09a;margin-top:4px;" id="candidateOrderHint">-</div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="hint-box mb-3" id="candidateTip">
+                    评分 = 技能覆盖 40 + 接单状态 20 + 服务评分 20 + 当前负载 15 + 经验均衡 5 − 时段冲突扣分；
+                    技能未全覆盖的师傅会沉底显示且不可一键指派。
+                </div>
+                <div class="table-responsive" style="border:1px solid #e2e9e6;border-radius:10px;">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <th style="width:52px;">排名</th>
+                            <th style="width:150px;">师傅</th>
+                            <th style="width:180px;">技能</th>
+                            <th style="width:96px;">状态</th>
+                            <th style="width:110px;">在手 / 冲突</th>
+                            <th style="width:86px;">评分</th>
+                            <th style="width:120px;">匹配分</th>
+                            <th>推荐理由</th>
+                            <th style="width:100px;">操作</th>
+                        </tr>
+                        </thead>
+                        <tbody id="candidateBody">
+                        <tr><td colspan="9"><div class="empty-hint">加载中…</div></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <span style="font-size:12px;color:#8ba09a;margin-right:auto;" id="autoThresholdHint"></span>
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-primary" id="autoAssignBtn">
+                    <i class="bi bi-magic"></i> 一键指派最优
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ============ 运营取消弹窗 ============ -->
+<div class="modal fade" id="cancelModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">运营取消订单</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="hint-box mb-3">
+                    待派单与已派单可取消（已派单会同时释放师傅）；<strong>服务中</strong>订单不允许取消。
+                </div>
+                <label class="form-label">取消原因（选填）</label>
+                <input type="text" class="form-control" id="cancelReason" maxlength="200"
+                       placeholder="如：居民临时外出，协商改期">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">返回</button>
+                <button type="button" class="btn btn-danger" id="confirmCancelBtn">确认取消</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script th:inline="none">
+    $(function () {
+        var state = { pageNum: 1, pageSize: 10, orderStatus: 0, keyword: '' };
+        var candidateModal = new bootstrap.Modal(document.getElementById('candidateModal'));
+        var cancelModal = new bootstrap.Modal(document.getElementById('cancelModal'));
+        var currentOrder = null;      // 当前弹窗关联的订单
+        var cancelTargetId = null;
+        var candidates = [];          // 最近一次候选列表
+
+        /* ============ 订单列表 ============ */
+        function renderOrders(page) {
+            var rows = page.records || [];
+            if (!rows.length) {
+                $('#orderBody').html('<tr><td colspan="7"><div class="empty-hint">'
+                    + '<i class="bi bi-check2-all"></i>该状态下没有订单，运转正常</div></td></tr>');
+                return;
+            }
+            var html = '';
+            rows.forEach(function (o) {
+                var ops = '<button class="btn btn-sm btn-primary" data-cand="' + o.id + '">'
+                    + '<i class="bi bi-magic"></i> ' + (o.orderStatus === 0 ? '智能派单' : '查看候选') + '</button>'
+                    + ' <button class="btn btn-sm btn-outline-danger" data-cancel="' + o.id + '">取消</button>';
+                html += ''
+                    + '<tr>'
+                    + '  <td><span style="font-family:Consolas,monospace;font-size:12px;">'
+                    + CM.escapeHtml(o.orderNo) + '</span></td>'
+                    + '  <td><div style="font-weight:600;">' + CM.escapeHtml(o.serviceItemName) + '</div>'
+                    + '      <div style="font-size:11px;color:#8ba09a;">' + CM.escapeHtml(o.categoryName || '') + '</div></td>'
+                    + '  <td>' + CM.fmtTime(o.appointTime) + '</td>'
+                    + '  <td><div>' + CM.escapeHtml(o.residentName) + ' · ' + CM.escapeHtml(o.contactPhone || '') + '</div>'
+                    + '      <div style="font-size:11px;color:#8ba09a;">' + CM.escapeHtml(o.serviceAddress || '') + '</div></td>'
+                    + '  <td>¥' + CM.money(o.price) + '</td>'
+                    + '  <td>' + CM.statusBadge(o.orderStatus)
+                    + (o.workerName ? '<div style="font-size:11px;color:#8ba09a;margin-top:4px;">'
+                        + CM.escapeHtml(o.workerName) + '</div>' : '') + '</td>'
+                    + '  <td><div class="op-btns">' + ops + '</div></td>'
+                    + '</tr>';
+            });
+            $('#orderBody').html(html);
+        }
+
+        function loadOrders() {
+            CM.get('/api/common/orders', {
+                pageNum: state.pageNum,
+                pageSize: state.pageSize,
+                orderStatus: state.orderStatus,
+                keyword: state.keyword
+            }).then(function (page) {
+                renderOrders(page);
+                CM.pager($('#orderPager'), page, function (go) {
+                    state.pageNum = go;
+                    loadOrders();
+                });
+            });
+        }
+
+        function loadKpi() {
+            CM.get('/api/common/orders', { pageNum: 1, pageSize: 1, orderStatus: 0 }).then(function (p) {
+                $('#kpiPending').text(p.total || 0);
+            });
+            CM.get('/api/common/orders', { pageNum: 1, pageSize: 1, orderStatus: 1 }).then(function (p) {
+                $('#kpiDispatched').text(p.total || 0);
+            });
+        }
+
+        $('.toolbar .chip').on('click', function () {
+            $('.toolbar .chip').removeClass('active');
+            $(this).addClass('active');
+            state.orderStatus = Number($(this).data('status'));
+            state.pageNum = 1;
+            loadOrders();
+        });
+
+        $('#searchBtn').on('click', function () {
+            state.keyword = $.trim($('#kwInput').val());
+            state.pageNum = 1;
+            loadOrders();
+        });
+        $('#kwInput').on('keydown', function (e) {
+            if (e.key === 'Enter') {
+                $('#searchBtn').click();
+            }
+        });
+
+        /* ============ 候选弹窗 ============ */
+        $('#orderBody').on('click', '[data-cand]', function () {
+            var id = Number($(this).data('cand'));
+            var row = null;
+            // 从当前页数据里取出订单摘要（避免为弹窗再开一个详情接口）
+            $('#candidateBody').html('<tr><td colspan="9"><div class="empty-hint">候选计算中…</div></td></tr>');
+            candidates = [];
+            // 通过详情接口取订单信息，保证"弹窗标题"与库内数据一致
+            CM.get('/api/common/orders/' + id).then(function (detail) {
+                row = detail;
+                currentOrder = detail;
+                $('#candidateOrderHint').text(detail.orderNo + ' · ' + detail.serviceItemName
+                    + ' · 预约 ' + CM.fmtTime(detail.appointTime) + ' · ' + detail.serviceAddress);
+                var isReassign = detail.orderStatus === 1;
+                $('#autoAssignBtn').toggle(!isReassign);
+                $('#candidateTip').html(isReassign
+                    ? '当前为<b>改派</b>场景：选择新师傅后将释放原师傅（' + CM.escapeHtml(detail.workerName || '-')
+                    + '）并通知双方。候选已排除本单自身的时间占用。'
+                    : '评分 = 技能覆盖 40 + 接单状态 20 + 服务评分 20 + 当前负载 15 + 经验均衡 5 − 时段冲突扣分；技能未全覆盖的师傅会沉底显示且不可一键指派。');
+                candidateModal.show();
+                return CM.get('/api/admin/dispatch/candidates/' + id);
+            }).then(function (list) {
+                candidates = list || [];
+                renderCandidates();
+            }).catch(function (err) {
+                $('#candidateBody').html('<tr><td colspan="9"><div class="empty-hint">'
+                    + CM.escapeHtml(err.message || '候选加载失败') + '</div></td></tr>');
+            });
+        });
+
+        function renderCandidates() {
+            if (!candidates.length) {
+                $('#candidateBody').html('<tr><td colspan="9"><div class="empty-hint">'
+                    + '<i class="bi bi-person-x"></i>没有可派单的师傅（可能全部休息中）</div></td></tr>');
+                return;
+            }
+            var isReassign = currentOrder && currentOrder.orderStatus === 1;
+            var html = '';
+            candidates.forEach(function (c, idx) {
+                var tags = (c.skillTagsList || []).map(function (t) {
+                    var hit = c.skillMatched;
+                    return '<span class="tag" style="margin:1px 2px;">' + CM.escapeHtml(t) + '</span>';
+                }).join('');
+                var score = c.matchScore == null ? 0 : Number(c.matchScore);
+                var barColor = score >= 75 ? '#0f7c64' : (score >= 60 ? '#e8a33d' : '#c9483f');
+                var statusHtml = c.workStatus === 1
+                    ? '<span class="badge-soft st-3">空闲</span>'
+                    : '<span class="badge-soft st-2">忙碌</span>';
+                var action;
+                if (!c.skillMatched) {
+                    action = '<span style="font-size:11px;color:#a5b5b0;">技能不匹配</span>';
+                } else if (isReassign) {
+                    action = '<button class="btn btn-sm btn-outline-primary" data-reassign="' + c.userId + '">改派</button>';
+                } else {
+                    action = '<button class="btn btn-sm btn-outline-primary" data-assign="' + c.userId + '">指派</button>';
+                }
+                html += ''
+                    + '<tr' + (c.skillMatched ? '' : ' style="opacity:.55;"') + '>'
+                    + '  <td><span class="rank-badge ' + (idx === 0 ? 'top1' : '') + '">' + (idx + 1) + '</span></td>'
+                    + '  <td><div style="font-weight:600;">' + CM.escapeHtml(c.realName) + '</div>'
+                    + '      <div style="font-size:11px;color:#8ba09a;">' + CM.escapeHtml(c.phone || '') + '</div></td>'
+                    + '  <td>' + tags + '</td>'
+                    + '  <td>' + statusHtml + '</td>'
+                    + '  <td><span style="font-weight:600;">' + (c.activeOrders || 0) + '</span> 单'
+                    + (c.timeConflict ? '<div style="font-size:11px;color:#c9483f;">冲突 ' + c.conflictOrders + ' 单</div>' : '')
+                    + '</td>'
+                    + '  <td>' + (c.ratingScore == null ? '5.00' : Number(c.ratingScore).toFixed(2)) + '</td>'
+                    + '  <td><div style="font-weight:700;color:' + barColor + ';">' + score.toFixed(2) + '</div>'
+                    + '      <div style="height:5px;background:#eef3f1;border-radius:3px;margin-top:4px;">'
+                    + '        <div style="height:5px;width:' + Math.min(score, 100) + '%;background:' + barColor
+                    + ';border-radius:3px;"></div></div></td>'
+                    + '  <td><div class="reason-cell">' + CM.escapeHtml(c.reason || '') + '</div></td>'
+                    + '  <td>' + action + '</td>'
+                    + '</tr>';
+            });
+            $('#candidateBody').html(html);
+        }
+
+        /* 人工指派（dispatch_type=MANUAL，与智能派单形成审计区分） */
+        $('#candidateBody').on('click', '[data-assign]', function () {
+            var workerId = Number($(this).data('assign'));
+            var name = $(this).closest('tr').find('td').eq(1).find('div').first().text();
+            CM.confirm('确认将订单 ' + currentOrder.orderNo + ' 指派给 ' + name + '？', '确认指派')
+                .then(function (ok) {
+                    if (!ok) {
+                        return;
+                    }
+                    return CM.post('/api/admin/dispatch/assign', {
+                        orderId: currentOrder.id,
+                        workerId: workerId,
+                        dispatchType: 'MANUAL'
+                    }).then(function () {
+                        candidateModal.hide();
+                        CM.toast('指派成功，已通知师傅与居民', 'success');
+                        loadOrders();
+                        loadKpi();
+                    }).catch(CM.alertError);
+                });
+        });
+
+        /* 改派（dispatch_type 固定 REASSIGN，后端不接受前端伪造） */
+        $('#candidateBody').on('click', '[data-reassign]', function () {
+            var workerId = Number($(this).data('reassign'));
+            CM.confirm('确认把该订单改派给你选择的师傅？原师傅将被释放并收到撤销通知。', '确认改派')
+                .then(function (ok) {
+                    if (!ok) {
+                        return;
+                    }
+                    return CM.post('/api/admin/dispatch/reassign', {
+                        orderId: currentOrder.id,
+                        newWorkerId: workerId
+                    }).then(function () {
+                        candidateModal.hide();
+                        CM.toast('改派成功', 'success');
+                        loadOrders();
+                        loadKpi();
+                    }).catch(CM.alertError);
+                });
+        });
+
+        /* 一键智能派单：算法选最优，低于阈值时后端直接 400 并提示人工选择 */
+        $('#autoAssignBtn').on('click', function () {
+            if (!currentOrder) {
+                return;
+            }
+            var $btn = $(this).prop('disabled', true);
+            CM.post('/api/admin/dispatch/auto/' + currentOrder.id, {})
+                .then(function (assigned) {
+                    candidateModal.hide();
+                    CM.toast('已智能指派给 ' + assigned.realName + '（匹配分 ' + assigned.matchScore + '）', 'success');
+                    loadOrders();
+                    loadKpi();
+                })
+                .catch(CM.alertError)
+                .finally(function () {
+                    $btn.prop('disabled', false);
+                });
+        });
+
+        /* ============ 运营取消 ============ */
+        $('#orderBody').on('click', '[data-cancel]', function () {
+            cancelTargetId = Number($(this).data('cancel'));
+            $('#cancelReason').val('');
+            cancelModal.show();
+        });
+
+        $('#confirmCancelBtn').on('click', function () {
+            if (!cancelTargetId) {
+                return;
+            }
+            var reason = encodeURIComponent($.trim($('#cancelReason').val()));
+            var $btn = $(this).prop('disabled', true);
+            CM.put('/api/admin/dispatch/order/' + cancelTargetId + '/cancel?reason=' + reason, {})
+                .then(function () {
+                    cancelModal.hide();
+                    CM.toast('订单已取消，已通知居民与师傅', 'success');
+                    loadOrders();
+                    loadKpi();
+                })
+                .catch(CM.alertError)
+                .finally(function () {
+                    $btn.prop('disabled', false);
+                });
+        });
+
+        /* ============ 初始化 ============ */
+        CM.loadMe().then(function () {
+            loadOrders();
+            loadKpi();
+        }).catch(function () {
+        });
+    });
+</script>
+</body>
+</html>

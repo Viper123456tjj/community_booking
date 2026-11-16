@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<!--
+  师傅端 · 我的工单（Batch 5）
+  读：GET /api/common/orders（师傅视角由后端按登录态注入 workerId）
+  写：PUT /api/worker/order/{id}/start、PUT /api/worker/order/{id}/complete
+-->
+<head th:replace="~{fragments/layout :: head('我的工单')}"></head>
+<body>
+<div class="app-shell">
+    <aside th:replace="~{fragments/layout :: sidebar('workbench')}"></aside>
+    <div class="app-body">
+        <nav th:replace="~{fragments/layout :: topbar('我的工单')}"></nav>
+
+        <main class="app-main">
+            <!-- 工单状态概览：三个数字由前端从接口统计，避免为看板再开一个接口 -->
+            <div class="stat-grid mb-3">
+                <div class="stat-card">
+                    <div class="label">待开工工单</div>
+                    <div class="value" id="kpiDispatched">-</div>
+                    <div class="icon"><i class="bi bi-clipboard-check"></i></div>
+                </div>
+                <div class="stat-card accent">
+                    <div class="label">服务中工单</div>
+                    <div class="value" id="kpiInService">-</div>
+                    <div class="icon"><i class="bi bi-tools"></i></div>
+                </div>
+                <div class="stat-card warn">
+                    <div class="label">待开工工单最早预约</div>
+                    <div class="value" style="font-size:16px;font-weight:600;padding-top:6px;" id="kpiEarliest">-</div>
+                    <div class="icon"><i class="bi bi-alarm"></i></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="toolbar">
+                        <span class="chip active" data-status="1">待开工</span>
+                        <span class="chip" data-status="2">服务中</span>
+                        <span class="chip" data-status="3">已完成</span>
+                        <span class="chip" data-status="">全部工单</span>
+                    </div>
+                    <span class="sub" id="listHint">加载中…</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                        <tr>
+                            <th style="width:165px;">订单号</th>
+                            <th>服务项目 / 居民</th>
+                            <th style="width:140px;">预约上门</th>
+                            <th>服务地址</th>
+                            <th style="width:92px;">金额</th>
+                            <th style="width:88px;">状态</th>
+                            <th style="width:180px;">操作</th>
+                        </tr>
+                        </thead>
+                        <tbody id="workBody">
+                        <tr><td colspan="7"><div class="empty-hint"><i class="bi bi-hourglass-split"></i>加载中…</div></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="cm-pager" id="workPager"></div>
+            </div>
+
+            <div class="hint-box mt-3">
+                <strong>操作规范：</strong>到达现场后点击「开始服务」；服务完成并请居民验收后点击「完成服务」，
+                系统会把工单置为已完成并通知居民在 7 天内评价。已派单但无法上门的工单请联系物业管理员改派，
+                师傅端不提供自行退单入口。
+            </div>
+        </main>
+
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </div>
+</div>
+
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script th:inline="none">
+    $(function () {
+        var state = { pageNum: 1, pageSize: 10, orderStatus: 1 };
+
+        function renderRows(page) {
+            var rows = page.records || [];
+            $('#listHint').text('共 ' + (page.total || 0) + ' 条');
+            if (!rows.length) {
+                $('#workBody').html('<tr><td colspan="7"><div class="empty-hint">'
+                    + '<i class="bi bi-emoji-smile"></i>当前没有该状态的工单</div></td></tr>');
+                return;
+            }
+            var html = '';
+            rows.forEach(function (o) {
+                var ops = '';
+                if (o.orderStatus === 1) {
+                    ops = '<button class="btn btn-sm btn-primary" data-start="' + o.id + '">'
+                        + '<i class="bi bi-play-fill"></i> 开始服务</button>';
+                } else if (o.orderStatus === 2) {
+                    ops = '<button class="btn btn-sm btn-success" data-complete="' + o.id + '">'
+                        + '<i class="bi bi-check2-all"></i> 完成服务</button>';
+                } else {
+                    ops = '<span style="color:#a5b5b0;font-size:12px;">'
+                        + (o.evaluated ? '居民已评价' : '无需操作') + '</span>';
+                }
+                var remark = o.remark
+                    ? '<div style="font-size:11px;color:#8ba09a;">备注：' + CM.escapeHtml(o.remark) + '</div>' : '';
+                html += ''
+                    + '<tr>'
+                    + '  <td><span style="font-family:Consolas,monospace;font-size:12px;">'
+                    + CM.escapeHtml(o.orderNo) + '</span></td>'
+                    + '  <td><div style="font-weight:600;">' + CM.escapeHtml(o.serviceItemName) + '</div>'
+                    + '      <div style="font-size:11px;color:#8ba09a;">' + CM.escapeHtml(o.residentName)
+                    + ' · ' + CM.escapeHtml(o.contactPhone || '') + '</div></td>'
+                    + '  <td>' + CM.fmtTime(o.appointTime) + '</td>'
+                    + '  <td style="font-size:12px;">' + CM.escapeHtml(o.serviceAddress || '-') + remark + '</td>'
+                    + '  <td>¥' + CM.money(o.price) + '</td>'
+                    + '  <td>' + CM.statusBadge(o.orderStatus) + '</td>'
+                    + '  <td><div class="op-btns">' + ops + '</div></td>'
+                    + '</tr>';
+            });
+            $('#workBody').html(html);
+        }
+
+        function loadOrders() {
+            CM.get('/api/common/orders', {
+                pageNum: state.pageNum,
+                pageSize: state.pageSize,
+                orderStatus: state.orderStatus
+            }).then(function (page) {
+                renderRows(page);
+                CM.pager($('#workPager'), page, function (go) {
+                    state.pageNum = go;
+                    loadOrders();
+                });
+            });
+        }
+
+        /** 概览数字：分别查询两种状态的总数（pageSize=1 只取 total，代价极小） */
+        function loadKpi() {
+            CM.get('/api/common/orders', { pageNum: 1, pageSize: 1, orderStatus: 1 }).then(function (p) {
+                $('#kpiDispatched').text(p.total || 0);
+                var first = (p.records || [])[0];
+                $('#kpiEarliest').text(first ? CM.fmtTime(first.appointTime) : '暂无待开工');
+            });
+            CM.get('/api/common/orders', { pageNum: 1, pageSize: 1, orderStatus: 2 }).then(function (p) {
+                $('#kpiInService').text(p.total || 0);
+            });
+        }
+
+        $('.toolbar .chip').on('click', function () {
+            $('.toolbar .chip').removeClass('active');
+            $(this).addClass('active');
+            var v = $(this).data('status');
+            state.orderStatus = v === '' ? null : Number(v);
+            state.pageNum = 1;
+            loadOrders();
+        });
+
+        /* 开工：状态机 1 -> 2（条件 UPDATE，重复点击会得到"只有已派单的工单可以开始服务"提示） */
+        $('#workBody').on('click', '[data-start]', function () {
+            var id = Number($(this).data('start'));
+            var $btn = $(this).prop('disabled', true);
+            CM.put('/api/worker/order/' + id + '/start', {}).then(function () {
+                CM.toast('已开始服务，请按规范施工', 'success');
+                loadOrders();
+                loadKpi();
+            }).catch(CM.alertError).finally(function () {
+                $btn.prop('disabled', false);
+            });
+        });
+
+        /* 完成：状态机 2 -> 3，完成后系统自动通知居民评价 */
+        $('#workBody').on('click', '[data-complete]', function () {
+            var id = Number($(this).data('complete'));
+            CM.confirm('确认该工单已完成且居民已验收？完成后将通知居民评价，且不可撤回。', '确认完成')
+                .then(function (ok) {
+                    if (!ok) {
+                        return;
+                    }
+                    return CM.put('/api/worker/order/' + id + '/complete', {}).then(function () {
+                        CM.toast('工单已完成，已通知居民评价', 'success');
+                        loadOrders();
+                        loadKpi();
+                    }).catch(CM.alertError);
+                });
+        });
+
+        CM.loadMe().then(function () {
+            loadOrders();
+            loadKpi();
+        }).catch(function () {
+        });
+    });
+</script>
+</body>
+</html>

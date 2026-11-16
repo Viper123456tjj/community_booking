@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<!--
+  居民端 · 我的预约（Batch 5）
+  读：GET /api/common/orders（归属条件由后端按登录角色注入，前端不传 userId）
+  写：PUT /api/resident/order/{id}/cancel、POST /api/resident/evaluation
+-->
+<head th:replace="~{fragments/layout :: head('我的预约')}"></head>
+<body>
+<div class="app-shell">
+    <aside th:replace="~{fragments/layout :: sidebar('orders')}"></aside>
+    <div class="app-body">
+        <nav th:replace="~{fragments/layout :: topbar('我的预约')}"></nav>
+
+        <main class="app-main">
+            <div class="card">
+                <div class="card-header">
+                    <div class="toolbar">
+                        <span class="chip active" data-status="">全部</span>
+                        <span class="chip" data-status="0">待派单</span>
+                        <span class="chip" data-status="1">已派单</span>
+                        <span class="chip" data-status="2">服务中</span>
+                        <span class="chip" data-status="3">已完成</span>
+                        <span class="chip" data-status="4">已取消</span>
+                    </div>
+                    <span class="sub" id="listHint">加载中…</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                        <tr>
+                            <th style="width:170px;">订单号</th>
+                            <th>服务项目</th>
+                            <th style="width:140px;">预约上门</th>
+                            <th style="width:96px;">金额</th>
+                            <th style="width:90px;">状态</th>
+                            <th style="width:100px;">师傅</th>
+                            <th style="width:220px;">操作</th>
+                        </tr>
+                        </thead>
+                        <tbody id="orderBody">
+                        <tr><td colspan="7"><div class="empty-hint"><i class="bi bi-hourglass-split"></i>加载中…</div></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="cm-pager" id="orderPager"></div>
+            </div>
+        </main>
+
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </div>
+</div>
+
+<!-- ============ 取消订单弹窗 ============ -->
+<div class="modal fade" id="cancelModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">取消预约</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="hint-box mb-3">
+                    仅<strong>待派单</strong>状态的订单可自助取消；取消后如需服务请重新预约。
+                </div>
+                <label class="form-label">取消原因（选填）</label>
+                <input type="text" class="form-control" id="cancelReason" maxlength="200"
+                       placeholder="如：时间冲突，改天再约">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">再想想</button>
+                <button type="button" class="btn btn-danger" id="confirmCancelBtn">确认取消</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ============ 评价弹窗 ============ -->
+<div class="modal fade" id="evalModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">评价本次服务</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-2" style="font-size:13px;color:#52645f;" id="evalOrderHint">-</div>
+                <div class="mb-3">
+                    <label class="form-label">服务评分 <span class="text-danger">*</span></label>
+                    <div class="star-row" id="starRow">
+                        <i class="bi bi-star" data-star="1"></i>
+                        <i class="bi bi-star" data-star="2"></i>
+                        <i class="bi bi-star" data-star="3"></i>
+                        <i class="bi bi-star" data-star="4"></i>
+                        <i class="bi bi-star" data-star="5"></i>
+                    </div>
+                    <div class="form-text" id="starText">请点击星星打分（1~5 星）</div>
+                </div>
+                <div>
+                    <label class="form-label">评价内容（选填）</label>
+                    <textarea class="form-control" id="evalComment" rows="3" maxlength="255"
+                              placeholder="说说师傅的服务态度、专业程度与到场及时性"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="submitEvalBtn">提交评价</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ============ 评价回显弹窗 ============ -->
+<div class="modal fade" id="viewEvalModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">我的评价</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="viewEvalBody">加载中…</div>
+        </div>
+    </div>
+</div>
+
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script th:inline="none">
+    $(function () {
+        var state = { pageNum: 1, pageSize: 10, orderStatus: null };
+        var cancelModal = new bootstrap.Modal(document.getElementById('cancelModal'));
+        var evalModal = new bootstrap.Modal(document.getElementById('evalModal'));
+        var viewEvalModal = new bootstrap.Modal(document.getElementById('viewEvalModal'));
+        var cancelTargetId = null;
+        var evalTargetId = null;
+        var evalStar = 5;
+
+        /* ============ 列表渲染 ============ */
+        function renderRows(page) {
+            var rows = page.records || [];
+            $('#listHint').text('共 ' + (page.total || 0) + ' 条预约记录');
+            if (!rows.length) {
+                $('#orderBody').html('<tr><td colspan="7"><div class="empty-hint">'
+                    + '<i class="bi bi-inbox"></i>还没有预约记录，去服务大厅挑一项吧</div></td></tr>');
+                return;
+            }
+            var html = '';
+            rows.forEach(function (o) {
+                var ops = '';
+                if (o.canCancel) {
+                    ops += '<button class="btn btn-sm btn-outline-danger" data-cancel="' + o.id + '">取消预约</button>';
+                }
+                if (o.canEvaluate) {
+                    ops += '<button class="btn btn-sm btn-primary" data-eval="' + o.id + '"'
+                        + ' data-name="' + CM.escapeHtml(o.serviceItemName) + '">去评价</button>';
+                }
+                if (o.evaluated) {
+                    ops += '<button class="btn btn-sm btn-outline-secondary" data-view="' + o.id + '">查看评价</button>';
+                }
+                if (!ops) {
+                    ops = '<span style="color:#a5b5b0;font-size:12px;">无可用操作</span>';
+                }
+                html += ''
+                    + '<tr>'
+                    + '  <td><span style="font-family:Consolas,monospace;font-size:12px;">'
+                    + CM.escapeHtml(o.orderNo) + '</span></td>'
+                    + '  <td><div style="font-weight:600;">' + CM.escapeHtml(o.serviceItemName) + '</div>'
+                    + '      <div style="font-size:11px;color:#8ba09a;">' + CM.escapeHtml(o.categoryName || '') + '</div></td>'
+                    + '  <td>' + CM.fmtTime(o.appointTime) + '</td>'
+                    + '  <td>¥' + CM.money(o.price) + '</td>'
+                    + '  <td>' + CM.statusBadge(o.orderStatus) + '</td>'
+                    + '  <td>' + (o.workerName ? CM.escapeHtml(o.workerName) : '<span style="color:#a5b5b0;">待指派</span>') + '</td>'
+                    + '  <td><div class="op-btns">' + ops + '</div></td>'
+                    + '</tr>';
+            });
+            $('#orderBody').html(html);
+        }
+
+        function loadOrders() {
+            CM.get('/api/common/orders', {
+                pageNum: state.pageNum,
+                pageSize: state.pageSize,
+                orderStatus: state.orderStatus
+            }).then(function (page) {
+                renderRows(page);
+                CM.pager($('#orderPager'), page, function (go) {
+                    state.pageNum = go;
+                    loadOrders();
+                });
+            });
+        }
+
+        /* ============ 状态筛选 ============ */
+        $('.toolbar .chip').on('click', function () {
+            $('.toolbar .chip').removeClass('active');
+            $(this).addClass('active');
+            var v = $(this).data('status');
+            state.orderStatus = v === '' ? null : Number(v);
+            state.pageNum = 1;
+            loadOrders();
+        });
+
+        /* ============ 取消 ============ */
+        $('#orderBody').on('click', '[data-cancel]', function () {
+            cancelTargetId = Number($(this).data('cancel'));
+            $('#cancelReason').val('');
+            cancelModal.show();
+        });
+
+        $('#confirmCancelBtn').on('click', function () {
+            if (!cancelTargetId) {
+                return;
+            }
+            var $btn = $(this).prop('disabled', true);
+            // 取消原因作为 query 参数（后端 @RequestParam，长度 <= 200）
+            var reason = encodeURIComponent($.trim($('#cancelReason').val()));
+            CM.put('/api/resident/order/' + cancelTargetId + '/cancel?reason=' + reason, {})
+                .then(function () {
+                    cancelModal.hide();
+                    CM.toast('订单已取消', 'success');
+                    loadOrders();
+                })
+                .catch(CM.alertError)
+                .finally(function () {
+                    $btn.prop('disabled', false);
+                });
+        });
+
+        /* ============ 评价 ============ */
+        $('#orderBody').on('click', '[data-eval]', function () {
+            evalTargetId = Number($(this).data('eval'));
+            $('#evalOrderHint').text('服务项目：' + $(this).data('name'));
+            evalStar = 5;
+            paintStars(5);
+            $('#evalComment').val('');
+            evalModal.show();
+        });
+
+        function paintStars(n) {
+            var texts = ['', '很不满意', '不太满意', '一般', '比较满意', '非常满意'];
+            $('#starRow i').each(function () {
+                var v = Number($(this).data('star'));
+                $(this).toggleClass('on', v <= n)
+                    .removeClass('bi-star-fill bi-star')
+                    .addClass(v <= n ? 'bi-star-fill' : 'bi-star');
+            });
+            $('#starText').text(n + ' 星 · ' + texts[n]);
+        }
+
+        $('#starRow').on('click', 'i', function () {
+            evalStar = Number($(this).data('star'));
+            paintStars(evalStar);
+        });
+        $('#starRow').on('mouseenter', 'i', function () {
+            paintStars(Number($(this).data('star')));
+        });
+        $('#starRow').on('mouseleave', function () {
+            paintStars(evalStar);
+        });
+
+        $('#submitEvalBtn').on('click', function () {
+            if (!evalTargetId) {
+                return;
+            }
+            var $btn = $(this).prop('disabled', true);
+            CM.post('/api/resident/evaluation', {
+                orderId: evalTargetId,
+                star: evalStar,
+                comment: $.trim($('#evalComment').val())
+            }).then(function () {
+                evalModal.hide();
+                CM.toast('评价提交成功，感谢您的反馈', 'success');
+                loadOrders();
+            }).catch(CM.alertError).finally(function () {
+                $btn.prop('disabled', false);
+            });
+        });
+
+        /* ============ 查看评价 ============ */
+        $('#orderBody').on('click', '[data-view]', function () {
+            var id = Number($(this).data('view'));
+            $('#viewEvalBody').html('加载中…');
+            viewEvalModal.show();
+            CM.get('/api/common/orders/' + id + '/evaluation').then(function (e) {
+                if (!e) {
+                    $('#viewEvalBody').html('<div class="empty-hint">该订单暂无评价</div>');
+                    return;
+                }
+                var stars = '';
+                for (var i = 1; i <= 5; i++) {
+                    stars += '<i class="bi ' + (i <= e.star ? 'bi-star-fill' : 'bi-star') + '"></i>';
+                }
+                $('#viewEvalBody').html(''
+                    + '<div class="star-row" style="font-size:20px;cursor:default;color:#e8a33d;">' + stars + '</div>'
+                    + '<div style="font-size:12px;color:#8ba09a;margin:8px 0 12px;">'
+                    + CM.fmtTime(e.createTime) + ' · 师傅 ' + CM.escapeHtml(e.workerName || '-') + '</div>'
+                    + '<div style="font-size:13px;line-height:1.8;">'
+                    + CM.escapeHtml(e.comment || '（未填写评价内容）') + '</div>');
+            }).catch(CM.alertError);
+        });
+
+        /* ============ 初始化 ============ */
+        CM.loadMe().then(loadOrders).catch(function () {
+        });
+    });
+</script>
+</body>
+</html>

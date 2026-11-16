@@ -1,0 +1,93 @@
+# =====================================================================
+# 社区便民服务预约系统（community-booking）主配置
+# 多环境策略：默认激活 dev；生产环境部署时使用 --spring.profiles.active=prod
+# =====================================================================
+spring:
+  profiles:
+    # 默认激活开发环境，生产环境通过启动参数覆盖
+    active: dev
+  application:
+    name: community-booking
+
+  # 文件上传上限：全局锁定 50MB（服务项目封面图等附件）
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+  # Thymeleaf：开发环境关闭缓存便于调试，生产环境由 prod 配置覆盖为强缓存
+  thymeleaf:
+    cache: false
+    encoding: UTF-8
+    mode: HTML
+    prefix: classpath:/templates/
+    suffix: .html
+
+  # 日期时间序列化统一格式与时区，保证 JSON 与模板渲染一致
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+
+  # RabbitMQ 公共配置（连接参数在各环境文件中定义）
+  rabbitmq:
+    listener:
+      simple:
+        # 手动 ACK：消费失败可手动 nack 进入死信/兜底处理，避免消息丢失
+        acknowledge-mode: manual
+        # 预取 1 条：防止单消费者堆积，配合手动 ACK 实现公平分发
+        prefetch: 1
+        retry:
+          # 消费端重试：3 次重试后进入死信/兜底处理
+          enabled: true
+          max-attempts: 3
+          initial-interval: 2000ms
+          multiplier: 2
+
+# MyBatis-Plus：Mapper XML 统一扫描，开启驼峰映射；缓存统一交由 Redis 管理
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.community.booking.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    # 关闭 MyBatis 二级缓存，避免与 Redis 双缓存不一致
+    cache-enabled: false
+
+# 业务自定义配置：上传目录、订单锁超时、预约限流、延迟队列 TTL、邮件署名
+community:
+  upload:
+    # 附件存储根目录（Linux 生产为 /data/community/upload，Windows 开发见 dev 配置）
+    dir: ./upload
+  order:
+    # 分布式锁 community:order:lock:{orderNo} 的持有超时（秒），状态机幂等控制
+    lock-seconds: 30
+    # 完成后保留天数：超期订单由每日 03:00 定时任务置 is_archived=1（退出常规列表与评价窗口）
+    archive-days: 7
+  ratelimit:
+    # @RateLimit 默认阈值：限居民 60 秒窗口内最多提交 3 次预约
+    max-times: 3
+    window-seconds: 60
+  mq:
+    # appoint.delay.queue 消息 TTL（毫秒），30 分钟 = 1800000，超时经死信路由到 appoint.cancel.queue 自动取消
+    appoint-delay-ttl-ms: 1800000
+    # 评价绩效重算的同步兜底开关：dev 消费者未启动时置 true（事务内同步重算），
+    # prod 置 false 走纯异步（评价接口只 INSERT + 投递，响应时间与聚合计算解耦）
+    eval-sync-fallback: true
+  dispatch:
+    # 智能派单"一键指派"的最低综合得分：低于该阈值说明候选存在时段冲突或负载偏高，
+    # 交由管理员在弹窗中人工抉择，避免算法强行指派带来二次改派
+    auto-threshold: 60
+    # 时间窗口冲突判定半径（小时）：预约时间前后各 2 小时与在手工单重叠即计为冲突
+    conflict-window-hours: 2
+  cache:
+    # 服务分类列表 / 热门服务缓存 TTL（分钟），写路径事务提交后精确失效
+    category-ttl-minutes: 30
+    hot-ttl-minutes: 10
+  mail:
+    # 邮件正文中显示的发件人署名
+    from-name: 社区便民服务预约系统
+
+# 日志级别：业务包默认 INFO，由 dev 环境覆盖为 DEBUG
+logging:
+  level:
+    com.community.booking: info

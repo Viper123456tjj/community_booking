@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<!--
+  管理端 · 服务目录（Batch 5）
+  项目：GET /api/admin/item/page、POST /api/admin/item、DELETE /api/admin/item/{id}、PUT /api/admin/item/{id}/status
+  分类：GET /api/admin/category/page、POST /api/admin/category、DELETE /api/admin/category/{id}
+  说明：技能标签必须落在师傅技能词表内（后端校验），否则该项目永远派不出单。
+-->
+<head th:replace="~{fragments/layout :: head('服务目录')}"></head>
+<body>
+<div class="app-shell">
+    <aside th:replace="~{fragments/layout :: sidebar('catalog')}"></aside>
+    <div class="app-body">
+        <nav th:replace="~{fragments/layout :: topbar('服务目录')}"></nav>
+
+        <main class="app-main">
+            <ul class="nav nav-pills mb-3" id="catalogTabs">
+                <li class="nav-item">
+                    <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#paneItems" type="button">
+                        <i class="bi bi-box-seam"></i> 服务项目
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" data-bs-toggle="pill" data-bs-target="#paneCategories" type="button">
+                        <i class="bi bi-tags"></i> 服务分类
+                    </button>
+                </li>
+            </ul>
+
+            <div class="tab-content">
+                <!-- ================= 服务项目 ================= -->
+                <div class="tab-pane fade show active" id="paneItems">
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="toolbar">
+                                <select class="form-select form-select-sm" id="itemCategoryFilter" style="min-width:150px;">
+                                    <option value="">全部分类</option>
+                                </select>
+                                <select class="form-select form-select-sm" id="itemStatusFilter" style="min-width:120px;">
+                                    <option value="">全部状态</option>
+                                    <option value="1">上架</option>
+                                    <option value="0">下架</option>
+                                </select>
+                                <input type="text" class="form-control form-control-sm" id="itemKw"
+                                       placeholder="项目名称" style="min-width:180px;">
+                                <button class="btn btn-sm btn-outline-primary" id="itemSearchBtn">
+                                    <i class="bi bi-search"></i> 查询
+                                </button>
+                            </div>
+                            <button class="btn btn-sm btn-primary" id="addItemBtn">
+                                <i class="bi bi-plus-lg"></i> 新增项目
+                            </button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle">
+                                <thead>
+                                <tr>
+                                    <th style="width:56px;">ID</th>
+                                    <th>项目名称</th>
+                                    <th style="width:110px;">分类</th>
+                                    <th style="width:110px;">价格</th>
+                                    <th style="width:200px;">所需技能</th>
+                                    <th style="width:76px;">热度</th>
+                                    <th style="width:80px;">状态</th>
+                                    <th style="width:190px;">操作</th>
+                                </tr>
+                                </thead>
+                                <tbody id="itemBody">
+                                <tr><td colspan="8"><div class="empty-hint">加载中…</div></td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="cm-pager" id="itemPager"></div>
+                    </div>
+                </div>
+
+                <!-- ================= 服务分类 ================= -->
+                <div class="tab-pane fade" id="paneCategories">
+                    <div class="card">
+                        <div class="card-header">
+                            <span>服务分类（排序值升序展示）</span>
+                            <button class="btn btn-sm btn-primary" id="addCategoryBtn">
+                                <i class="bi bi-plus-lg"></i> 新增分类
+                            </button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle">
+                                <thead>
+                                <tr>
+                                    <th style="width:56px;">ID</th>
+                                    <th>分类名称</th>
+                                    <th style="width:150px;">图标</th>
+                                    <th style="width:90px;">排序</th>
+                                    <th style="width:90px;">项目数</th>
+                                    <th style="width:150px;">操作</th>
+                                </tr>
+                                </thead>
+                                <tbody id="categoryBody">
+                                <tr><td colspan="6"><div class="empty-hint">加载中…</div></td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="cm-pager" id="categoryPager"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </div>
+</div>
+
+<!-- ============ 项目表单弹窗 ============ -->
+<div class="modal fade" id="itemModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="itemModalTitle">新增服务项目</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="itemForm">
+                    <input type="hidden" id="fItemId">
+                    <div class="row g-3">
+                        <div class="col-md-8">
+                            <label class="form-label">项目名称 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="fItemName" maxlength="64"
+                                   placeholder="如：室内管道疏通" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">所属分类 <span class="text-danger">*</span></label>
+                            <select class="form-select" id="fCategoryId" required></select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">服务价格（元） <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control" id="fPrice" min="0.01" step="0.01" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">计价单位 <span class="text-danger">*</span></label>
+                            <select class="form-select" id="fUnit">
+                                <option value="次">次</option>
+                                <option value="单">单</option>
+                                <option value="小时">小时</option>
+                                <option value="个">个</option>
+                                <option value="趟">趟</option>
+                                <option value="平方米">平方米</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">上架状态</label>
+                            <select class="form-select" id="fStatus">
+                                <option value="1">上架（居民可见）</option>
+                                <option value="0">下架（居民不可见）</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">所需技能标签 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="fSkillRequired" maxlength="128"
+                                   placeholder="多个标签用 | 分隔，如：管道疏通 或 水电维修|管道疏通" required>
+                            <div class="form-text" id="skillVocabHint">
+                                标签必须在师傅技能词表内，可从下表点选：
+                            </div>
+                            <div class="chip-row mt-2" id="skillVocab"></div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">服务说明</label>
+                            <textarea class="form-control" id="fDescription" rows="3" maxlength="2000"
+                                      placeholder="上门范围、包含内容、不包含项、售后保障等"></textarea>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="saveItemBtn">保存项目</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ============ 分类表单弹窗 ============ -->
+<div class="modal fade" id="categoryModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="categoryModalTitle">新增分类</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="categoryForm">
+                    <input type="hidden" id="fCategoryIdEdit">
+                    <div class="mb-3">
+                        <label class="form-label">分类名称 <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="fCategoryName" maxlength="32" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">图标 class</label>
+                        <input type="text" class="form-control" id="fIcon" maxlength="64"
+                               placeholder="如：bi-droplet（须以 bi- 开头）">
+                        <div class="form-text">使用 Bootstrap Icons 的 class 名，可留空。</div>
+                    </div>
+                    <div>
+                        <label class="form-label">排序值</label>
+                        <input type="number" class="form-control" id="fSortOrder" value="10" min="0" max="999">
+                        <div class="form-text">数值越小越靠前。</div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="saveCategoryBtn">保存分类</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script th:inline="none">
+    $(function () {
+        var itemState = { pageNum: 1, pageSize: 10, categoryId: null, status: null, keyword: '' };
+        var categoryState = { pageNum: 1, pageSize: 10 };
+        var categories = [];          // 分类缓存（下拉框与表格共用）
+        var vocab = [];               // 技能词表（从现有项目推导）
+        var itemModal = new bootstrap.Modal(document.getElementById('itemModal'));
+        var categoryModal = new bootstrap.Modal(document.getElementById('categoryModal'));
+
+        /* ============ 分类：加载与渲染 ============ */
+        function loadCategories() {
+            return CM.get('/api/admin/category/page', { pageNum: 1, pageSize: 100 }).then(function (page) {
+                categories = page.records || [];
+                var options = '<option value="">全部分类</option>';
+                var formOptions = '';
+                categories.forEach(function (c) {
+                    var opt = '<option value="' + c.id + '">' + CM.escapeHtml(c.categoryName) + '</option>';
+                    options += opt;
+                    formOptions += opt;
+                });
+                $('#itemCategoryFilter').html(options);
+                $('#fCategoryId').html(formOptions);
+                renderCategoryTable(page);
+            });
+        }
+
+        function renderCategoryTable(page) {
+            var rows = page.records || [];
+            if (!rows.length) {
+                $('#categoryBody').html('<tr><td colspan="6"><div class="empty-hint">暂无分类</div></td></tr>');
+                return;
+            }
+            var html = '';
+            rows.forEach(function (c) {
+                html += ''
+                    + '<tr>'
+                    + '  <td>' + c.id + '</td>'
+                    + '  <td style="font-weight:600;">' + CM.escapeHtml(c.categoryName) + '</td>'
+                    + '  <td><i class="bi ' + CM.escapeHtml(c.icon || 'bi-tag') + '"></i> '
+                    + '<span style="font-size:12px;color:#8ba09a;">' + CM.escapeHtml(c.icon || '-') + '</span></td>'
+                    + '  <td>' + (c.sortOrder || 0) + '</td>'
+                    + '  <td>' + (c.itemCount || 0) + '</td>'
+                    + '  <td><div class="op-btns">'
+                    + '    <button class="btn btn-sm btn-outline-primary" data-edit-category="' + c.id + '">编辑</button>'
+                    + '    <button class="btn btn-sm btn-outline-danger" data-del-category="' + c.id + '">删除</button>'
+                    + '  </div></td>'
+                    + '</tr>';
+            });
+            $('#categoryBody').html(html);
+            CM.pager($('#categoryPager'), page, function (go) {
+                categoryState.pageNum = go;
+                loadCategoryPage();
+            });
+        }
+
+        function loadCategoryPage() {
+            CM.get('/api/admin/category/page', {
+                pageNum: categoryState.pageNum,
+                pageSize: categoryState.pageSize
+            }).then(renderCategoryTable);
+        }
+
+        /* ============ 项目：加载与渲染 ============ */
+        function loadItems() {
+            CM.get('/api/admin/item/page', {
+                pageNum: itemState.pageNum,
+                pageSize: itemState.pageSize,
+                categoryId: itemState.categoryId,
+                status: itemState.status,
+                keyword: itemState.keyword
+            }).then(function (page) {
+                var rows = page.records || [];
+                // 技能词表：从全部项目（含下架）的 skill_required 推导，供表单点选
+                vocab = [];
+                rows.forEach(function (it) {
+                    (it.skillTagsList || []).forEach(function (t) {
+                        if (vocab.indexOf(t) < 0) {
+                            vocab.push(t);
+                        }
+                    });
+                });
+                renderSkillVocab();
+                if (!rows.length) {
+                    $('#itemBody').html('<tr><td colspan="8"><div class="empty-hint">'
+                        + '<i class="bi bi-inbox"></i>没有符合条件的服务项目</div></td></tr>');
+                    return;
+                }
+                var html = '';
+                rows.forEach(function (it) {
+                    var tags = (it.skillTagsList || []).map(function (t) {
+                        return '<span class="tag">' + CM.escapeHtml(t) + '</span>';
+                    }).join(' ');
+                    html += ''
+                        + '<tr>'
+                        + '  <td>' + it.id + '</td>'
+                        + '  <td><div style="font-weight:600;">' + CM.escapeHtml(it.itemName) + '</div>'
+                        + '      <div style="font-size:11px;color:#8ba09a;">'
+                        + CM.escapeHtml((it.description || '').substring(0, 40)) + '</div></td>'
+                        + '  <td>' + CM.escapeHtml(it.categoryName || '-') + '</td>'
+                        + '  <td>¥' + CM.money(it.price) + '<span style="font-size:11px;color:#8ba09a;">/'
+                        + CM.escapeHtml(it.unit) + '</span></td>'
+                        + '  <td>' + tags + '</td>'
+                        + '  <td>' + (it.hotScore || 0) + '</td>'
+                        + '  <td>' + (it.status === 1 ? '<span class="badge-soft st-3">上架</span>'
+                            : '<span class="badge-soft st-4">下架</span>') + '</td>'
+                        + '  <td><div class="op-btns">'
+                        + '    <button class="btn btn-sm btn-outline-primary" data-edit-item="' + it.id + '">编辑</button>'
+                        + '    <button class="btn btn-sm btn-outline-secondary" data-toggle-item="' + it.id + '"'
+                        + '            data-status="' + it.status + '">'
+                        + (it.status === 1 ? '下架' : '上架') + '</button>'
+                        + '    <button class="btn btn-sm btn-outline-danger" data-del-item="' + it.id + '">删除</button>'
+                        + '  </div></td>'
+                        + '</tr>';
+                });
+                $('#itemBody').html(html);
+                CM.pager($('#itemPager'), page, function (go) {
+                    itemState.pageNum = go;
+                    loadItems();
+                });
+            });
+        }
+
+        function renderSkillVocab() {
+            if (!vocab.length) {
+                $('#skillVocab').html('<span style="font-size:12px;color:#a5b5b0;">暂无历史标签，可直接手工输入</span>');
+                return;
+            }
+            var html = '';
+            vocab.forEach(function (t) {
+                html += '<span class="tag" style="cursor:pointer;" data-vocab="'
+                    + CM.escapeHtml(t) + '">+ ' + CM.escapeHtml(t) + '</span>';
+            });
+            $('#skillVocab').html(html);
+        }
+
+        $('#skillVocab').on('click', '[data-vocab]', function () {
+            var t = $(this).data('vocab');
+            var $input = $('#fSkillRequired');
+            var parts = $.trim($input.val()) ? $.trim($input.val()).split('|') : [];
+            if (parts.indexOf(t) < 0) {
+                parts.push(t);
+                $input.val(parts.join('|'));
+            }
+        });
+
+        /* ============ 筛选 ============ */
+        $('#itemSearchBtn').on('click', function () {
+            var c = $('#itemCategoryFilter').val();
+            var s = $('#itemStatusFilter').val();
+            itemState.categoryId = c === '' ? null : Number(c);
+            itemState.status = s === '' ? null : Number(s);
+            itemState.keyword = $.trim($('#itemKw').val());
+            itemState.pageNum = 1;
+            loadItems();
+        });
+        $('#itemKw').on('keydown', function (e) {
+            if (e.key === 'Enter') {
+                $('#itemSearchBtn').click();
+            }
+        });
+
+        /* ============ 项目：新增 / 编辑 / 上下架 / 删除 ============ */
+        function openItemModal(item) {
+            $('#itemModalTitle').text(item ? '编辑服务项目' : '新增服务项目');
+            $('#fItemId').val(item ? item.id : '');
+            $('#fItemName').val(item ? item.itemName : '');
+            $('#fCategoryId').val(item ? String(item.categoryId) : ($('#fCategoryId option').eq(1).val() || ''));
+            $('#fPrice').val(item ? item.price : '');
+            $('#fUnit').val(item ? item.unit : '次');
+            $('#fStatus').val(item ? String(item.status) : '1');
+            $('#fSkillRequired').val(item ? item.skillRequired : '');
+            $('#fDescription').val(item ? item.description : '');
+            itemModal.show();
+        }
+
+        $('#addItemBtn').on('click', function () {
+            openItemModal(null);
+        });
+
+        $('#itemBody').on('click', '[data-edit-item]', function () {
+            var id = Number($(this).data('edit-item'));
+            CM.get('/api/admin/item/' + id).then(openItemModal);
+        });
+
+        $('#saveItemBtn').on('click', function () {
+            var payload = {
+                id: $('#fItemId').val() ? Number($('#fItemId').val()) : null,
+                categoryId: $('#fCategoryId').val() ? Number($('#fCategoryId').val()) : null,
+                itemName: $.trim($('#fItemName').val()),
+                price: Number($('#fPrice').val()),
+                unit: $('#fUnit').val(),
+                skillRequired: $.trim($('#fSkillRequired').val()),
+                description: $.trim($('#fDescription').val()),
+                status: Number($('#fStatus').val())
+            };
+            if (!payload.itemName || !payload.categoryId || !(payload.price > 0) || !payload.skillRequired) {
+                CM.toast('请完整填写名称、分类、价格与所需技能', 'error');
+                return;
+            }
+            var $btn = $(this).prop('disabled', true);
+            CM.post('/api/admin/item', payload).then(function () {
+                itemModal.hide();
+                CM.toast('服务项目已保存', 'success');
+                loadItems();
+                loadCategories();
+            }).catch(CM.alertError).finally(function () {
+                $btn.prop('disabled', false);
+            });
+        });
+
+        $('#itemBody').on('click', '[data-toggle-item]', function () {
+            var id = Number($(this).data('toggle-item'));
+            var status = Number($(this).data('status'));
+            var target = status === 1 ? 0 : 1;
+            CM.put('/api/admin/item/' + id + '/status?status=' + target, {})
+                .then(function () {
+                    CM.toast(target === 1 ? '已上架' : '已下架', 'success');
+                    loadItems();
+                }).catch(CM.alertError);
+        });
+
+        $('#itemBody').on('click', '[data-del-item]', function () {
+            var id = Number($(this).data('del-item'));
+            CM.confirm('删除后该项目将不再出现在居民端（历史订单保留），确认删除？', '确认删除')
+                .then(function (ok) {
+                    if (!ok) {
+                        return;
+                    }
+                    return CM.del('/api/admin/item/' + id).then(function () {
+                        CM.toast('已删除', 'success');
+                        loadItems();
+                    }).catch(CM.alertError);
+                });
+        });
+
+        /* ============ 分类：新增 / 编辑 / 删除 ============ */
+        function openCategoryModal(category) {
+            $('#categoryModalTitle').text(category ? '编辑服务分类' : '新增服务分类');
+            $('#fCategoryIdEdit').val(category ? category.id : '');
+            $('#fCategoryName').val(category ? category.categoryName : '');
+            $('#fIcon').val(category ? category.icon : 'bi-tag');
+            $('#fSortOrder').val(category ? category.sortOrder : 10);
+            categoryModal.show();
+        }
+
+        $('#addCategoryBtn').on('click', function () {
+            openCategoryModal(null);
+        });
+
+        $('#categoryBody').on('click', '[data-edit-category]', function () {
+            var id = Number($(this).data('edit-category'));
+            CM.get('/api/admin/category/' + id).then(openCategoryModal);
+        });
+
+        $('#saveCategoryBtn').on('click', function () {
+            var payload = {
+                id: $('#fCategoryIdEdit').val() ? Number($('#fCategoryIdEdit').val()) : null,
+                categoryName: $.trim($('#fCategoryName').val()),
+                icon: $.trim($('#fIcon').val()),
+                sortOrder: Number($('#fSortOrder').val() || 0)
+            };
+            if (!payload.categoryName) {
+                CM.toast('分类名称不能为空', 'error');
+                return;
+            }
+            var $btn = $(this).prop('disabled', true);
+            CM.post('/api/admin/category', payload).then(function () {
+                categoryModal.hide();
+                CM.toast('分类已保存（缓存已失效，下次读取自动重建）', 'success');
+                loadCategories();
+                loadItems();
+            }).catch(CM.alertError).finally(function () {
+                $btn.prop('disabled', false);
+            });
+        });
+
+        $('#categoryBody').on('click', '[data-del-category]', function () {
+            var id = Number($(this).data('del-category'));
+            CM.confirm('删除分类前请确认该分类下已无服务项目，确认删除？', '确认删除')
+                .then(function (ok) {
+                    if (!ok) {
+                        return;
+                    }
+                    return CM.del('/api/admin/category/' + id).then(function () {
+                        CM.toast('已删除', 'success');
+                        loadCategories();
+                    }).catch(CM.alertError);
+                });
+        });
+
+        /* ============ 初始化 ============ */
+        CM.loadMe().then(function () {
+            return loadCategories();
+        }).then(function () {
+            loadItems();
+        }).catch(function () {
+        });
+    });
+</script>
+</body>
+</html>

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<!--
+  登录页（Batch 5）：左右分栏 —— 左侧品牌介绍，右侧登录卡片。
+  登录成功后按角色分流：居民 -> 服务大厅，师傅 -> 工单工作台，管理员 -> 运营看板。
+-->
+<head th:replace="~{fragments/layout :: head('登录')}"></head>
+<body>
+<div class="login-page">
+
+    <!-- 左侧品牌区：窄屏自动隐藏（见 app.css 的媒体查询） -->
+    <section class="login-brand">
+        <h1>社区便民服务预约系统</h1>
+        <p class="lead">
+            把"居民打电话找物业、物业挨个问师傅"的传统流程，升级为在线预约、智能派单、
+            履约跟踪与评价闭环的一体化服务。
+        </p>
+        <div class="brand-points">
+            <div class="brand-point"><i class="bi bi-lightning-charge"></i>智能派单：多维权重评分选人</div>
+            <div class="brand-point"><i class="bi bi-shield-check"></i>三级角色：居民 / 师傅 / 管理员</div>
+            <div class="brand-point"><i class="bi bi-clock-history"></i>超时兜底：30 分钟未派单自动取消</div>
+            <div class="brand-point"><i class="bi bi-graph-up"></i>运营看板：六组指标实时可视</div>
+        </div>
+    </section>
+
+    <!-- 右侧登录卡片 -->
+    <section class="login-panel">
+        <div class="login-card">
+            <h2>欢迎回来</h2>
+            <div class="sub">请使用社区分配的账号登录</div>
+            <form id="loginForm" autocomplete="off">
+                <div class="mb-3">
+                    <label class="form-label" for="username">用户名</label>
+                    <div class="input-group">
+                        <span class="input-group-text bg-white"><i class="bi bi-person"></i></span>
+                        <input type="text" class="form-control" id="username" name="username"
+                               placeholder="请输入用户名" required maxlength="32">
+                    </div>
+                </div>
+                <div class="mb-4">
+                    <label class="form-label" for="password">密码</label>
+                    <div class="input-group">
+                        <span class="input-group-text bg-white"><i class="bi bi-lock"></i></span>
+                        <input type="password" class="form-control" id="password" name="password"
+                               placeholder="请输入密码" required maxlength="32">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary w-100 btn-login" id="loginBtn">
+                    登 录
+                </button>
+                <div class="text-danger mt-3 d-none" id="loginError" style="font-size:13px;"></div>
+            </form>
+
+            <!-- 演示账号：点击任意一行自动填充，降低手动输入的试错成本 -->
+            <div class="demo-accounts">
+                演示账号（密码统一 <code>123456</code>）：<br>
+                管理员 <code data-fill="admin">admin</code> ·
+                师傅 <code data-fill="worker1">worker1</code> ·
+                居民 <code data-fill="resident1">resident1</code>
+            </div>
+        </div>
+    </section>
+</div>
+
+<!-- 登录页不引入侧栏/顶栏，只复用公共 head 中的样式与底部脚本 -->
+<script th:src="@{/vendor/jquery.min.js}"></script>
+<script th:src="@{/vendor/bootstrap.bundle.min.js}"></script>
+<script th:src="@{/js/api.js}"></script>
+<script th:inline="none">
+    $(function () {
+        // 已登录用户访问登录页：直接送到工作台，避免重复登录
+        CM.get('/api/auth/me', null, { silent: true }).then(function (user) {
+            if (user && CM.ROLE_HOME[user.role]) {
+                window.location.href = CM.ROLE_HOME[user.role];
+            }
+        }).catch(function () {
+            // 未登录（401）：停留在登录页
+        });
+
+        // 演示账号一键填充
+        $('[data-fill]').on('click', function () {
+            $('#username').val($(this).data('fill'));
+            $('#password').val('123456').focus();
+        });
+
+        $('#loginForm').on('submit', function (e) {
+            e.preventDefault();
+            var $btn = $('#loginBtn');
+            var $err = $('#loginError').addClass('d-none').text('');
+            var payload = {
+                username: $.trim($('#username').val()),
+                password: $('#password').val()
+            };
+            if (!payload.username || !payload.password) {
+                $err.text('请输入用户名与密码').removeClass('d-none');
+                return;
+            }
+            $btn.prop('disabled', true).text('登录中…');
+            CM.post('/api/auth/login', payload, { silent: true })
+                .then(function (user) {
+                    CM.toast('登录成功，正在进入工作台…', 'success');
+                    var home = CM.ROLE_HOME[user.role] || '/login';
+                    setTimeout(function () {
+                        window.location.href = home;
+                    }, 260);
+                })
+                .catch(function (err) {
+                    $err.text(err.message || '登录失败').removeClass('d-none');
+                    $btn.prop('disabled', false).text('登 录');
+                });
+        });
+    });
+</script>
+</body>
+</html>

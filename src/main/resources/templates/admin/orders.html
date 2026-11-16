@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<!--
+  管理端 · 订单管理（Batch 5）
+  读：GET /api/common/orders（管理员视角为全量，可按状态/分类/项目/关键字筛选）
+  写：PUT /api/admin/dispatch/order/{id}/cancel（与派单中心共用运营取消接口）
+-->
+<head th:replace="~{fragments/layout :: head('订单管理')}"></head>
+<body>
+<div class="app-shell">
+    <aside th:replace="~{fragments/layout :: sidebar('orders')}"></aside>
+    <div class="app-body">
+        <nav th:replace="~{fragments/layout :: topbar('订单管理')}"></nav>
+
+        <main class="app-main">
+            <div class="card mb-3">
+                <div class="card-body">
+                    <div class="toolbar">
+                        <select class="form-select form-select-sm" id="statusSelect" style="min-width:130px;">
+                            <option value="">全部状态</option>
+                            <option value="0">待派单</option>
+                            <option value="1">已派单</option>
+                            <option value="2">服务中</option>
+                            <option value="3">已完成</option>
+                            <option value="4">已取消</option>
+                        </select>
+                        <select class="form-select form-select-sm" id="categorySelect" style="min-width:150px;">
+                            <option value="">全部分类</option>
+                        </select>
+                        <input type="text" class="form-control form-control-sm" id="kwInput"
+                               placeholder="订单号 / 项目 / 居民" style="min-width:200px;">
+                        <button class="btn btn-sm btn-primary" id="searchBtn">
+                            <i class="bi bi-search"></i> 查询
+                        </button>
+                        <button class="btn btn-sm btn-light" id="resetBtn">
+                            <i class="bi bi-arrow-counterclockwise"></i> 重置
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span>订单列表</span>
+                    <span class="sub" id="listHint">加载中…</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                        <tr>
+                            <th style="width:160px;">订单号</th>
+                            <th>服务项目 / 分类</th>
+                            <th style="width:120px;">居民</th>
+                            <th style="width:110px;">师傅</th>
+                            <th style="width:130px;">预约上门</th>
+                            <th style="width:88px;">金额</th>
+                            <th style="width:86px;">状态</th>
+                            <th style="width:96px;">派单方式</th>
+                            <th style="width:86px;">评价</th>
+                            <th style="width:110px;">操作</th>
+                        </tr>
+                        </thead>
+                        <tbody id="orderBody">
+                        <tr><td colspan="10"><div class="empty-hint"><i class="bi bi-hourglass-split"></i>加载中…</div></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="cm-pager" id="orderPager"></div>
+            </div>
+        </main>
+
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </div>
+</div>
+
+<!-- 订单详情 / 运营取消 -->
+<div class="modal fade" id="detailModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">订单详情</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="detailBody">加载中…</div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-danger d-none" id="cancelFromDetail">运营取消</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="cancelModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">运营取消</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <label class="form-label">取消原因（选填）</label>
+                <input type="text" class="form-control" id="cancelReason" maxlength="200"
+                       placeholder="如：居民临时外出，协商改期">
+                <div class="form-text">取消后系统会以邮件通知居民（已派单时同时通知师傅）。</div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">返回</button>
+                <button type="button" class="btn btn-danger" id="confirmCancelBtn">确认取消</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script th:inline="none">
+    $(function () {
+        var state = { pageNum: 1, pageSize: 10, orderStatus: null, categoryId: null, keyword: '' };
+        var detailModal = new bootstrap.Modal(document.getElementById('detailModal'));
+        var cancelModal = new bootstrap.Modal(document.getElementById('cancelModal'));
+        var cancelTargetId = null;
+        var detailOrder = null;
+
+        /* 分类下拉：与居民端同一接口（缓存命中 Redis 分类列表） */
+        CM.get('/api/common/categories').then(function (list) {
+            var html = '<option value="">全部分类</option>';
+            (list || []).forEach(function (c) {
+                html += '<option value="' + c.id + '">' + CM.escapeHtml(c.categoryName) + '</option>';
+            });
+            $('#categorySelect').html(html);
+        });
+
+        function renderRows(page) {
+            var rows = page.records || [];
+            $('#listHint').text('共 ' + (page.total || 0) + ' 条订单');
+            if (!rows.length) {
+                $('#orderBody').html('<tr><td colspan="10"><div class="empty-hint">'
+                    + '<i class="bi bi-inbox"></i>没有符合条件的订单</div></td></tr>');
+                return;
+            }
+            var html = '';
+            rows.forEach(function (o) {
+                var canCancel = o.orderStatus === 0 || o.orderStatus === 1;
+                html += ''
+                    + '<tr>'
+                    + '  <td><span style="font-family:Consolas,monospace;font-size:12px;">'
+                    + CM.escapeHtml(o.orderNo) + '</span></td>'
+                    + '  <td><div style="font-weight:600;">' + CM.escapeHtml(o.serviceItemName) + '</div>'
+                    + '      <div style="font-size:11px;color:#8ba09a;">' + CM.escapeHtml(o.categoryName || '') + '</div></td>'
+                    + '  <td>' + CM.escapeHtml(o.residentName) + '</td>'
+                    + '  <td>' + (o.workerName ? CM.escapeHtml(o.workerName) : '<span style="color:#a5b5b0;">—</span>') + '</td>'
+                    + '  <td>' + CM.fmtTime(o.appointTime) + '</td>'
+                    + '  <td>¥' + CM.money(o.price) + '</td>'
+                    + '  <td>' + CM.statusBadge(o.orderStatus) + '</td>'
+                    + '  <td style="font-size:12px;">' + CM.escapeHtml(o.dispatchTypeText || '—') + '</td>'
+                    + '  <td style="font-size:12px;">' + (o.evaluated ? '<span class="badge-soft st-3">已评价</span>'
+                        : '<span style="color:#a5b5b0;">—</span>') + '</td>'
+                    + '  <td><div class="op-btns">'
+                    + '    <button class="btn btn-sm btn-outline-primary" data-detail="' + o.id + '">详情</button>'
+                    + (canCancel ? '    <button class="btn btn-sm btn-outline-danger" data-cancel="' + o.id + '">取消</button>' : '')
+                    + '</div></td>'
+                    + '</tr>';
+            });
+            $('#orderBody').html(html);
+        }
+
+        function loadOrders() {
+            CM.get('/api/common/orders', {
+                pageNum: state.pageNum,
+                pageSize: state.pageSize,
+                orderStatus: state.orderStatus,
+                categoryId: state.categoryId,
+                keyword: state.keyword
+            }).then(function (page) {
+                renderRows(page);
+                CM.pager($('#orderPager'), page, function (go) {
+                    state.pageNum = go;
+                    loadOrders();
+                });
+            });
+        }
+
+        function collectFilter() {
+            var s = $('#statusSelect').val();
+            var c = $('#categorySelect').val();
+            state.orderStatus = s === '' ? null : Number(s);
+            state.categoryId = c === '' ? null : Number(c);
+            state.keyword = $.trim($('#kwInput').val());
+            state.pageNum = 1;
+        }
+
+        $('#searchBtn').on('click', function () {
+            collectFilter();
+            loadOrders();
+        });
+        $('#kwInput').on('keydown', function (e) {
+            if (e.key === 'Enter') {
+                $('#searchBtn').click();
+            }
+        });
+        $('#resetBtn').on('click', function () {
+            $('#statusSelect').val('');
+            $('#categorySelect').val('');
+            $('#kwInput').val('');
+            collectFilter();
+            loadOrders();
+        });
+
+        /* 详情弹窗 */
+        $('#orderBody').on('click', '[data-detail]', function () {
+            var id = Number($(this).data('detail'));
+            $('#detailBody').html('加载中…');
+            $('#cancelFromDetail').addClass('d-none');
+            detailModal.show();
+            CM.get('/api/common/orders/' + id).then(function (o) {
+                detailOrder = o;
+                var rows = [
+                    ['订单号', o.orderNo],
+                    ['服务项目', o.serviceItemName + '（' + (o.categoryName || '-') + '）'],
+                    ['居民', o.residentName + ' · ' + (o.contactPhone || '-')],
+                    ['服务地址', o.serviceAddress || '-'],
+                    ['预约时间', CM.fmtTime(o.appointTime)],
+                    ['承接师傅', o.workerName || '待指派'],
+                    ['订单金额', '¥' + CM.money(o.price)],
+                    ['派单方式', o.dispatchTypeText || '—'],
+                    ['当前状态', o.orderStatusText],
+                    ['完成时间', o.finishTime ? CM.fmtTime(o.finishTime) : '—'],
+                    ['下单时间', CM.fmtTime(o.createTime)],
+                    ['备注', o.remark || '—']
+                ];
+                var html = '<table class="table table-sm mb-0">';
+                rows.forEach(function (r) {
+                    html += '<tr><td style="width:92px;color:#8ba09a;">' + r[0] + '</td><td>'
+                        + CM.escapeHtml(r[1]) + '</td></tr>';
+                });
+                html += '</table>';
+                $('#detailBody').html(html);
+                if (o.orderStatus === 0 || o.orderStatus === 1) {
+                    $('#cancelFromDetail').removeClass('d-none');
+                }
+            }).catch(CM.alertError);
+        });
+
+        $('#cancelFromDetail').on('click', function () {
+            if (!detailOrder) {
+                return;
+            }
+            detailModal.hide();
+            cancelTargetId = detailOrder.id;
+            $('#cancelReason').val('');
+            cancelModal.show();
+        });
+
+        $('#orderBody').on('click', '[data-cancel]', function () {
+            cancelTargetId = Number($(this).data('cancel'));
+            $('#cancelReason').val('');
+            cancelModal.show();
+        });
+
+        $('#confirmCancelBtn').on('click', function () {
+            if (!cancelTargetId) {
+                return;
+            }
+            var reason = encodeURIComponent($.trim($('#cancelReason').val()));
+            var $btn = $(this).prop('disabled', true);
+            CM.put('/api/admin/dispatch/order/' + cancelTargetId + '/cancel?reason=' + reason, {})
+                .then(function () {
+                    cancelModal.hide();
+                    CM.toast('订单已取消', 'success');
+                    loadOrders();
+                })
+                .catch(CM.alertError)
+                .finally(function () {
+                    $btn.prop('disabled', false);
+                });
+        });
+
+        CM.loadMe().then(loadOrders).catch(function () {
+        });
+    });
+</script>
+</body>
+</html>

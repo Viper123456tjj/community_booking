@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<!--
+  师傅端 · 服务档案（Batch 5）
+  读：GET /api/worker/profile、GET /api/common/items（从中提取技能词表）
+  写：PUT /api/worker/profile（Service 强制 userId=登录用户，越权编辑他人档案无效）
+-->
+<head th:replace="~{fragments/layout :: head('服务档案')}"></head>
+<body>
+<div class="app-shell">
+    <aside th:replace="~{fragments/layout :: sidebar('profile')}"></aside>
+    <div class="app-body">
+        <nav th:replace="~{fragments/layout :: topbar('服务档案')}"></nav>
+
+        <main class="app-main">
+            <div class="row g-3">
+                <!-- 左：只读指标 -->
+                <div class="col-lg-4">
+                    <div class="card">
+                        <div class="card-header"><span>我的服务数据</span></div>
+                        <div class="card-body">
+                            <div class="d-flex align-items-center gap-3 mb-3">
+                                <span class="avatar" style="width:48px;height:48px;font-size:18px;"
+                                      id="avatarChar">师</span>
+                                <div>
+                                    <div style="font-size:16px;font-weight:700;" id="pRealName">-</div>
+                                    <div style="font-size:12px;color:#8ba09a;" id="pUsername">-</div>
+                                </div>
+                            </div>
+                            <div class="d-flex justify-content-between py-2" style="border-bottom:1px dashed #e2e9e6;">
+                                <span style="color:#6b7d78;">平均评分</span>
+                                <span class="rating-text" id="pRating">-</span>
+                            </div>
+                            <div class="d-flex justify-content-between py-2" style="border-bottom:1px dashed #e2e9e6;">
+                                <span style="color:#6b7d78;">累计完成</span>
+                                <span style="font-weight:600;" id="pTotalOrders">-</span>
+                            </div>
+                            <div class="d-flex justify-content-between py-2" style="border-bottom:1px dashed #e2e9e6;">
+                                <span style="color:#6b7d78;">当前在手</span>
+                                <span style="font-weight:600;" id="pActive">-</span>
+                            </div>
+                            <div class="d-flex justify-content-between py-2">
+                                <span style="color:#6b7d78;">接单状态</span>
+                                <span id="pStatus">-</span>
+                            </div>
+                            <div class="hint-box mt-3">
+                                评分与累计完成数由系统在「完成服务 + 居民评价」后自动更新，不可手工填写；
+                                <strong>忙碌</strong>状态会在派单/开工时自动置位，完成后自动回置空闲。
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右：可编辑表单 -->
+                <div class="col-lg-8">
+                    <div class="card">
+                        <div class="card-header">
+                            <span>技能与接单意愿</span>
+                            <span class="sub">技能标签决定你能被哪些服务派单</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-4">
+                                <label class="form-label">我的技能标签（可多选）</label>
+                                <div class="chip-row" id="skillChips">
+                                    <span class="text-muted" style="font-size:13px;">技能词表加载中…</span>
+                                </div>
+                                <div class="form-text">
+                                    只能选择服务目录中真实存在的技能标签；若缺少某类技能，请先联系管理员在服务目录中补充对应服务。
+                                </div>
+                            </div>
+
+                            <div class="mb-4">
+                                <label class="form-label">接单意愿</label>
+                                <div class="d-flex gap-3">
+                                    <label class="d-flex align-items-center gap-2" style="cursor:pointer;">
+                                        <input type="radio" name="workStatus" value="1" checked>
+                                        <span>空闲（接受新派单）</span>
+                                    </label>
+                                    <label class="d-flex align-items-center gap-2" style="cursor:pointer;">
+                                        <input type="radio" name="workStatus" value="0">
+                                        <span>休息（暂停派单）</span>
+                                    </label>
+                                </div>
+                                <div class="form-text">
+                                    休息后不再进入智能派单候选池；若仍有在手工单，系统会拒绝切换为休息以免工单无人承接。
+                                </div>
+                            </div>
+
+                            <button class="btn btn-primary" id="saveProfileBtn">
+                                <i class="bi bi-save"></i> 保存档案
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </div>
+</div>
+
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script th:inline="none">
+    $(function () {
+        var profile = null;
+        var selected = {};   // 已选技能标签集合（对象当 Set 用）
+
+        /* 技能词表：从服务项目的 skill_required 并集推导，保证"可选即必可达" */
+        function loadVocabulary() {
+            return CM.get('/api/common/items', { pageNum: 1, pageSize: 100 }).then(function (page) {
+                var vocab = [];
+                (page.records || []).forEach(function (it) {
+                    (it.skillTagsList || []).forEach(function (t) {
+                        if (vocab.indexOf(t) < 0) {
+                            vocab.push(t);
+                        }
+                    });
+                });
+                renderChips(vocab);
+            });
+        }
+
+        function renderChips(vocab) {
+            if (!vocab.length) {
+                $('#skillChips').html('<span class="text-muted" style="font-size:13px;">暂无可选技能</span>');
+                return;
+            }
+            var html = '';
+            vocab.forEach(function (t) {
+                html += '<span class="chip' + (selected[t] ? ' active' : '') + '" data-skill="'
+                    + CM.escapeHtml(t) + '">' + CM.escapeHtml(t) + '</span>';
+            });
+            $('#skillChips').html(html);
+        }
+
+        $('#skillChips').on('click', '.chip', function () {
+            var t = $(this).data('skill');
+            if (selected[t]) {
+                delete selected[t];
+                $(this).removeClass('active');
+            } else {
+                selected[t] = true;
+                $(this).addClass('active');
+            }
+        });
+
+        function renderProfile() {
+            $('#pRealName').text(profile.realName || '-');
+            $('#pUsername').text('@' + (profile.username || ''));
+            $('#avatarChar').text((profile.realName || '师').substring(0, 1));
+            $('#pRating').text((profile.ratingScore == null ? '5.00' : Number(profile.ratingScore).toFixed(2)) + ' 分');
+            $('#pTotalOrders').text((profile.totalOrders || 0) + ' 单');
+            $('#pActive').text((profile.activeOrders || 0) + ' 单');
+            $('#pStatus').html(profile.workStatus === 2
+                ? '<span class="badge-soft st-2">忙碌</span>'
+                : (profile.workStatus === 0
+                    ? '<span class="badge-soft st-4">休息</span>'
+                    : '<span class="badge-soft st-3">空闲</span>'));
+            // 忙碌状态由系统控制，表单只能展示为"空闲"或"休息"，此处按非休息处理
+            $('input[name=workStatus][value="' + (profile.workStatus === 0 ? 0 : 1) + '"]').prop('checked', true);
+        }
+
+        function loadProfile() {
+            return CM.get('/api/worker/profile').then(function (p) {
+                profile = p;
+                selected = {};
+                (p.skillTagsList || []).forEach(function (t) {
+                    selected[t] = true;
+                });
+                renderProfile();
+            });
+        }
+
+        $('#saveProfileBtn').on('click', function () {
+            var tags = Object.keys(selected);
+            if (!tags.length) {
+                CM.toast('请至少选择一个技能标签，否则无法被派单', 'error');
+                return;
+            }
+            var workStatus = Number($('input[name=workStatus]:checked').val());
+            var $btn = $(this).prop('disabled', true);
+            // userId 由后端覆写为登录用户，这里传当前值仅为满足 @NotNull 校验
+            CM.put('/api/worker/profile', {
+                userId: profile.userId,
+                skillTags: tags.join('|'),
+                workStatus: workStatus
+            }).then(function () {
+                CM.toast('档案已保存', 'success');
+                return loadProfile();
+            }).catch(CM.alertError).finally(function () {
+                $btn.prop('disabled', false);
+            });
+        });
+
+        CM.loadMe().then(function () {
+            return Promise.all([loadProfile(), loadVocabulary()]);
+        }).then(function () {
+            renderChips(Object.keys(selected).length ? collectVocab() : []);
+        }).catch(function () {
+        });
+
+        /* 词表与已选集合合并渲染：已选但词表中没有的历史标签也要显示，避免"保存即丢失" */
+        function collectVocab() {
+            var vocab = [];
+            $('#skillChips .chip').each(function () {
+                vocab.push($(this).data('skill'));
+            });
+            Object.keys(selected).forEach(function (t) {
+                if (vocab.indexOf(t) < 0) {
+                    vocab.push(t);
+                }
+            });
+            return vocab;
+        }
+    });
+</script>
+</body>
+</html>

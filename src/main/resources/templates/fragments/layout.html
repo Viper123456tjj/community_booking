@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<!--
+  =====================================================================
+  公共布局片段（Batch 5）：head / 侧边栏 / 顶栏 / 页脚 / 脚本
+  ---------------------------------------------------------------------
+  用法：
+    <head th:replace="~{fragments/layout :: head('页面标题')}"></head>
+    <aside th:replace="~{fragments/layout :: sidebar('home')}"></aside>
+    <nav th:replace="~{fragments/layout :: topbar('页面标题')}"></nav>
+    <footer th:replace="~{fragments/layout :: footer}"></footer>
+    <th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+  侧边栏按 sec:authorize 只渲染当前角色的菜单，未授权菜单不会出现在
+  HTML 里（而非仅 CSS 隐藏），越权用户因此看不到任何入口。
+  =====================================================================
+-->
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+
+<!-- ==================== 1. 公共 head ==================== -->
+<head th:fragment="head(title)">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="${title} + ' · 社区便民服务预约系统'">社区便民服务预约系统</title>
+    <!-- 静态资源全部本地化：不依赖任何 CDN，内网/断网环境同样可完整运行 -->
+    <link rel="stylesheet" th:href="@{/vendor/bootstrap.min.css}">
+    <link rel="stylesheet" th:href="@{/vendor/bootstrap-icons.css}">
+    <link rel="stylesheet" th:href="@{/css/app.css}">
+</head>
+
+<body>
+
+<!-- ==================== 2. 侧边栏（按角色渲染菜单） ==================== -->
+<aside th:fragment="sidebar(active)" class="app-sidebar" id="appSidebar">
+    <div class="sidebar-brand">
+        <span class="logo"><i class="bi bi-house-heart"></i></span>
+        <span>社区便民服务</span>
+    </div>
+
+    <!-- 居民端菜单：服务大厅 + 我的预约 -->
+    <th:block sec:authorize="hasRole('RESIDENT')">
+        <div class="sidebar-group">居民服务</div>
+        <a class="sidebar-link" th:classappend="${active == 'home'} ? 'active'" th:href="@{/resident/home}">
+            <i class="bi bi-grid"></i><span>服务大厅</span>
+        </a>
+        <a class="sidebar-link" th:classappend="${active == 'orders'} ? 'active'" th:href="@{/resident/orders}">
+            <i class="bi bi-journal-text"></i><span>我的预约</span>
+        </a>
+    </th:block>
+
+    <!-- 师傅端菜单：工单 / 档案 / 评价 -->
+    <th:block sec:authorize="hasRole('WORKER')">
+        <div class="sidebar-group">接单工作台</div>
+        <a class="sidebar-link" th:classappend="${active == 'workbench'} ? 'active'" th:href="@{/worker/workbench}">
+            <i class="bi bi-clipboard-check"></i><span>我的工单</span>
+        </a>
+        <a class="sidebar-link" th:classappend="${active == 'profile'} ? 'active'" th:href="@{/worker/profile}">
+            <i class="bi bi-person-badge"></i><span>服务档案</span>
+        </a>
+        <a class="sidebar-link" th:classappend="${active == 'evaluations'} ? 'active'" th:href="@{/worker/evaluations}">
+            <i class="bi bi-star-half"></i><span>我的评价</span>
+        </a>
+    </th:block>
+
+    <!-- 管理端菜单：看板 / 派单 / 目录 / 师傅 / 订单 -->
+    <th:block sec:authorize="hasRole('ADMIN')">
+        <div class="sidebar-group">运营管理</div>
+        <a class="sidebar-link" th:classappend="${active == 'dashboard'} ? 'active'" th:href="@{/admin/dashboard}">
+            <i class="bi bi-bar-chart-line"></i><span>运营看板</span>
+        </a>
+        <a class="sidebar-link" th:classappend="${active == 'dispatch'} ? 'active'" th:href="@{/admin/dispatch}">
+            <i class="bi bi-send-check"></i><span>派单中心</span>
+        </a>
+        <a class="sidebar-link" th:classappend="${active == 'orders'} ? 'active'" th:href="@{/admin/orders}">
+            <i class="bi bi-receipt"></i><span>订单管理</span>
+        </a>
+        <div class="sidebar-group">基础数据</div>
+        <a class="sidebar-link" th:classappend="${active == 'catalog'} ? 'active'" th:href="@{/admin/catalog}">
+            <i class="bi bi-box-seam"></i><span>服务目录</span>
+        </a>
+        <a class="sidebar-link" th:classappend="${active == 'workers'} ? 'active'" th:href="@{/admin/workers}">
+            <i class="bi bi-people"></i><span>师傅管理</span>
+        </a>
+    </th:block>
+
+    <div class="sidebar-group">账号</div>
+    <a class="sidebar-link" href="#" data-logout>
+        <i class="bi bi-box-arrow-right"></i><span>退出登录</span>
+    </a>
+</aside>
+
+<!-- ==================== 3. 顶栏 ==================== -->
+<nav th:fragment="topbar(title)" class="topbar">
+    <div class="d-flex align-items-center gap-2">
+        <!-- 窄屏汉堡按钮：切换侧栏抽屉（仅移动端可见） -->
+        <button class="btn btn-sm btn-light d-lg-none" type="button" id="sidebarToggle">
+            <i class="bi bi-list"></i>
+        </button>
+        <span class="page-title" th:text="${title}">页面标题</span>
+    </div>
+    <div class="user-chip">
+        <span class="avatar" data-user-avatar>社</span>
+        <div class="d-none d-sm-block">
+            <div style="color:#1f2d2a;font-weight:600;" data-user-name>加载中…</div>
+            <div style="font-size:11px;" data-user-role></div>
+        </div>
+        <a href="#" class="btn btn-sm btn-outline-secondary ms-2" data-logout>
+            <i class="bi bi-box-arrow-right"></i> 退出
+        </a>
+    </div>
+</nav>
+
+<!-- ==================== 4. 页脚 ===================== -->
+<footer th:fragment="footer" class="app-footer">
+    社区便民服务预约系统 · Spring Boot 2.7.18 + Thymeleaf + Redis + RabbitMQ · 仅用于教学演示
+</footer>
+
+<!-- ==================== 5. 公共脚本 ==================== -->
+<th:block th:fragment="scripts">
+    <script th:src="@{/vendor/jquery.min.js}"></script>
+    <script th:src="@{/vendor/bootstrap.bundle.min.js}"></script>
+    <script th:src="@{/js/api.js}"></script>
+    <script th:inline="none">
+        // 退出登录：侧栏与顶栏两处入口共用同一处理
+        $(function () {
+            $(document).on('click', '[data-logout]', function (e) {
+                e.preventDefault();
+                CM.logout();
+            });
+            // 移动端侧栏抽屉开关
+            $('#sidebarToggle').on('click', function () {
+                $('#appSidebar').toggleClass('open');
+            });
+            // 页面装配当前登录用户（顶栏姓名/角色/头像）
+            CM.loadMe().then(CM.renderUserChip).catch(function () {
+                // 未登录由 CM 内部跳转 /login，此处静默
+            });
+        });
+    </script>
+</th:block>
+
+</body>
+</html>

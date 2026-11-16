@@ -1,0 +1,58 @@
+# ---------- 构建产物 ----------
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# ---------- 运行时上传目录（封面图等用户数据，不入库）----------
+upload/
+
+# ---------- IDE ----------
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# ---------- 日志与临时文件 ----------
+*.log
+logs/
+*.pid
+*.tmp
+*.bak
+*.orig
+*.rej
+nohup.out
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 本地环境覆盖 ----------
+application-local.yml
+application-local.yaml
+.env
+.env.local
+
+# ---------- Python 测试脚本缓存 ----------
+__pycache__/
+*.py[cod]
+.venv/
+
+# ---------- 大体积原始录屏帧（README 用的是压缩版 docs/images/demo.gif）----------
+demo-raw/
+
+# ---------- 截图原图（2400px PNG，README 用的是 docs/images 里的压缩 JPEG）----------
+shots-raw/
+
+# ---------- 演示文稿与本地临时产物：不作为仓库交付内容 ----------
+*.pptx
+*.key
+*.pages
+.facts_*.json
+.facts_*.txt

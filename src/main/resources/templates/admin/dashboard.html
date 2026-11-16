@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<!--
+  管理端 · 运营看板（Batch 5）
+  数据来源：GET /api/admin/dashboard/overview（一次请求返回指标卡 + 五组图表数据）
+  图表库：ECharts 5（本地 vendor，禁用 CDN，内网可用）
+-->
+<head th:replace="~{fragments/layout :: head('运营看板')}"></head>
+<body>
+<div class="app-shell">
+    <aside th:replace="~{fragments/layout :: sidebar('dashboard')}"></aside>
+    <div class="app-body">
+        <nav th:replace="~{fragments/layout :: topbar('运营看板')}"></nav>
+
+        <main class="app-main">
+            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                <div style="font-size:13px;color:#6b7d78;">
+                    统计口径：归档单（完成超 7 天）不计入状态分布；热门榜读 Redis 热度 ZSET。
+                </div>
+                <button class="btn btn-outline-primary btn-sm" id="refreshBtn">
+                    <i class="bi bi-arrow-clockwise"></i> 刷新数据
+                </button>
+            </div>
+
+            <!-- 指标卡：8 个数字覆盖"单量 / 运力 / 质量"三类 -->
+            <div class="stat-grid mb-3">
+                <div class="stat-card">
+                    <div class="label">今日新建订单</div>
+                    <div class="value" id="kpiTodayOrders">-</div>
+                    <div class="icon"><i class="bi bi-cart-plus"></i></div>
+                </div>
+                <div class="stat-card warn">
+                    <div class="label">待派单（实时待办）</div>
+                    <div class="value" id="kpiPending">-</div>
+                    <div class="icon"><i class="bi bi-hourglass-split"></i></div>
+                </div>
+                <div class="stat-card accent">
+                    <div class="label">在途工单</div>
+                    <div class="value" id="kpiActive">-</div>
+                    <div class="icon"><i class="bi bi-truck"></i></div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">今日完成</div>
+                    <div class="value" id="kpiCompleted">-</div>
+                    <div class="icon"><i class="bi bi-check2-circle"></i></div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">近 30 天平均星级</div>
+                    <div class="value" id="kpiStar">-<small>分</small></div>
+                    <div class="icon"><i class="bi bi-star"></i></div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">空闲师傅</div>
+                    <div class="value" id="kpiWorkers" style="font-size:22px;">-</div>
+                    <div class="icon"><i class="bi bi-person-check"></i></div>
+                </div>
+                <div class="stat-card danger">
+                    <div class="label">近 7 天取消单</div>
+                    <div class="value" id="kpiCancelled">-</div>
+                    <div class="icon"><i class="bi bi-x-circle"></i></div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">师傅总数</div>
+                    <div class="value" id="kpiTotalWorkers" style="font-size:22px;">-</div>
+                    <div class="icon"><i class="bi bi-people"></i></div>
+                </div>
+            </div>
+
+            <!-- 图表区：1 张大图 + 4 张小图 -->
+            <div class="row g-3">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <span>近 7 日订单趋势</span>
+                            <span class="sub">新建 vs 完成（按下单日期归档）</span>
+                        </div>
+                        <div class="card-body">
+                            <div id="trendChart" class="chart-box"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="card">
+                        <div class="card-header"><span>订单状态分布</span></div>
+                        <div class="card-body"><div id="statusChart" class="chart-box sm"></div></div>
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="card">
+                        <div class="card-header"><span>服务分类占比</span></div>
+                        <div class="card-body"><div id="categoryChart" class="chart-box sm"></div></div>
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="card">
+                        <div class="card-header"><span>师傅接单排行 TOP5</span></div>
+                        <div class="card-body"><div id="workerChart" class="chart-box sm"></div></div>
+                    </div>
+                </div>
+                <div class="col-lg-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <span>热门服务 TOP5</span>
+                            <span class="sub">Redis ZSET 热度榜</span>
+                        </div>
+                        <div class="card-body"><div id="hotChart" class="chart-box sm"></div></div>
+                    </div>
+                </div>
+                <div class="col-lg-6">
+                    <div class="card">
+                        <div class="card-header"><span>运营提示</span></div>
+                        <div class="card-body">
+                            <div class="hint-box mb-2">
+                                <strong>待派单积压：</strong>超过 30 分钟未派单的订单会被延迟队列自动取消，
+                                请及时在「派单中心」处理。
+                            </div>
+                            <div class="hint-box mb-2">
+                                <strong>运力水位：</strong>空闲师傅为 0 时智能派单只能选出忙碌师傅（得分打折），
+                                建议提前协调排班。
+                            </div>
+                            <div class="hint-box">
+                                <strong>服务质量：</strong>近 30 天平均星级低于 4.0 时，建议复查低分工单的师傅技能匹配度。
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </div>
+</div>
+
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script th:src="@{/vendor/echarts.min.js}"></script>
+<script th:inline="none">
+    $(function () {
+        /** 图表实例缓存：避免重复 init 造成内存泄漏 */
+        var charts = {};
+        /** 统一配色（与 CSS 主色一致，保证图表与页面同一套视觉语言） */
+        var COLORS = ['#0f7c64', '#2fbd97', '#e8a33d', '#4f5bd5', '#8ba09a', '#c9483f'];
+
+        function chartOf(id) {
+            if (!charts[id]) {
+                charts[id] = echarts.init(document.getElementById(id));
+            }
+            return charts[id];
+        }
+
+        /* ============ 指标卡 ============ */
+        function renderKpi(k) {
+            $('#kpiTodayOrders').text(k.todayOrders || 0);
+            $('#kpiPending').text(k.pendingOrders || 0);
+            $('#kpiActive').text(k.activeOrders || 0);
+            $('#kpiCompleted').text(k.todayCompleted || 0);
+            $('#kpiStar').html((k.avgStar30d == null ? '0.00' : Number(k.avgStar30d).toFixed(2))
+                + '<small>分</small>');
+            $('#kpiWorkers').text(k.idleWorkers || 0);
+            $('#kpiTotalWorkers').text(k.totalWorkers || 0);
+            $('#kpiCancelled').text(k.weekCancelled || 0);
+        }
+
+        /* ============ 折线：近 7 日趋势 ============ */
+        function renderTrend(points) {
+            var days = (points || []).map(function (p) {
+                return p.date;
+            });
+            var totals = (points || []).map(function (p) {
+                return p.total;
+            });
+            var completed = (points || []).map(function (p) {
+                return p.completed;
+            });
+            chartOf('trendChart').setOption({
+                color: COLORS,
+                tooltip: { trigger: 'axis' },
+                legend: { data: ['新建订单', '完成订单'], right: 10, top: 0 },
+                grid: { left: 40, right: 20, top: 42, bottom: 30 },
+                xAxis: {
+                    type: 'category',
+                    data: days,
+                    boundaryGap: false,
+                    axisLine: { lineStyle: { color: '#dbe5e1' } },
+                    axisLabel: { color: '#6b7d78' }
+                },
+                yAxis: {
+                    type: 'value',
+                    minInterval: 1,
+                    splitLine: { lineStyle: { color: '#eef3f1' } },
+                    axisLabel: { color: '#6b7d78' }
+                },
+                series: [
+                    {
+                        name: '新建订单', type: 'line', smooth: true, data: totals,
+                        symbolSize: 7, lineStyle: { width: 3 },
+                        areaStyle: {
+                            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                                { offset: 0, color: 'rgba(15,124,100,.24)' },
+                                { offset: 1, color: 'rgba(15,124,100,.02)' }
+                            ])
+                        }
+                    },
+                    {
+                        name: '完成订单', type: 'line', smooth: true, data: completed,
+                        symbolSize: 7, lineStyle: { width: 3, type: 'dashed' }
+                    }
+                ]
+            });
+        }
+
+        /* ============ 环形：状态分布 ============ */
+        function renderStatus(list) {
+            var data = (list || []).map(function (d) {
+                return { name: d.name, value: d.value };
+            });
+            chartOf('statusChart').setOption({
+                color: COLORS,
+                tooltip: { trigger: 'item', formatter: '{b}: {c} 单（{d}%）' },
+                legend: { bottom: 0, icon: 'circle', textStyle: { color: '#6b7d78', fontSize: 11 } },
+                series: [{
+                    type: 'pie',
+                    radius: ['46%', '68%'],
+                    center: ['50%', '44%'],
+                    avoidLabelOverlap: true,
+                    itemStyle: { borderColor: '#fff', borderWidth: 2 },
+                    label: { show: false },
+                    data: data
+                }]
+            });
+        }
+
+        /* ============ 饼图：分类占比 ============ */
+        function renderCategory(list) {
+            var data = (list || []).map(function (d) {
+                return { name: d.name, value: d.value };
+            });
+            chartOf('categoryChart').setOption({
+                color: COLORS,
+                tooltip: { trigger: 'item', formatter: '{b}: {c} 单（{d}%）' },
+                legend: {
+                    type: 'scroll', bottom: 0, icon: 'circle',
+                    textStyle: { color: '#6b7d78', fontSize: 11 }
+                },
+                series: [{
+                    type: 'pie',
+                    radius: '62%',
+                    center: ['50%', '42%'],
+                    itemStyle: { borderColor: '#fff', borderWidth: 2 },
+                    label: { color: '#52645f', fontSize: 11, formatter: '{b}\n{d}%' },
+                    data: data
+                }]
+            });
+        }
+
+        /* ============ 横向柱：师傅排行 ============ */
+        function renderWorkerRank(list) {
+            var rows = (list || []).slice().reverse();   // ECharts 类目轴自下而上，反转后第一名在顶部
+            chartOf('workerChart').setOption({
+                color: ['#0f7c64'],
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                grid: { left: 70, right: 28, top: 16, bottom: 24 },
+                xAxis: {
+                    type: 'value', minInterval: 1,
+                    splitLine: { lineStyle: { color: '#eef3f1' } },
+                    axisLabel: { color: '#6b7d78' }
+                },
+                yAxis: {
+                    type: 'category',
+                    data: rows.map(function (d) { return d.name; }),
+                    axisLine: { lineStyle: { color: '#dbe5e1' } },
+                    axisLabel: { color: '#52645f', fontSize: 12 }
+                },
+                series: [{
+                    type: 'bar',
+                    data: rows.map(function (d) { return d.value; }),
+                    barWidth: 14,
+                    itemStyle: { borderRadius: [0, 7, 7, 0] },
+                    label: { show: true, position: 'right', color: '#52645f', fontSize: 11 }
+                }]
+            });
+        }
+
+        /* ============ 柱状：热门服务 ============ */
+        function renderHot(list) {
+            var rows = list || [];
+            chartOf('hotChart').setOption({
+                color: ['#e8a33d'],
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                grid: { left: 40, right: 20, top: 20, bottom: 62 },
+                xAxis: {
+                    type: 'category',
+                    data: rows.map(function (d) { return d.name; }),
+                    axisLine: { lineStyle: { color: '#dbe5e1' } },
+                    axisLabel: {
+                        color: '#52645f', fontSize: 11, interval: 0, rotate: 18,
+                        formatter: function (v) {
+                            return v.length > 8 ? v.substring(0, 8) + '…' : v;
+                        }
+                    }
+                },
+                yAxis: {
+                    type: 'value', minInterval: 1,
+                    splitLine: { lineStyle: { color: '#eef3f1' } },
+                    axisLabel: { color: '#6b7d78' }
+                },
+                series: [{
+                    type: 'bar',
+                    data: rows.map(function (d) { return d.value; }),
+                    barWidth: 22,
+                    itemStyle: { borderRadius: [7, 7, 0, 0] }
+                }]
+            });
+        }
+
+        /* ============ 数据加载 ============ */
+        function loadOverview() {
+            var $btn = $('#refreshBtn').prop('disabled', true);
+            CM.get('/api/admin/dashboard/overview').then(function (data) {
+                renderKpi(data.kpi || {});
+                renderTrend(data.trend);
+                renderStatus(data.statusDistribution);
+                renderCategory(data.categoryDistribution);
+                renderWorkerRank(data.workerRank);
+                renderHot(data.hotItems);
+                CM.toast('看板数据已更新', 'success');
+            }).catch(CM.alertError).finally(function () {
+                $btn.prop('disabled', false);
+            });
+        }
+
+        $('#refreshBtn').on('click', loadOverview);
+
+        // 窗口尺寸变化时重排图表（侧栏折叠/浏览器缩放都会触发）
+        window.addEventListener('resize', function () {
+            Object.keys(charts).forEach(function (k) {
+                charts[k].resize();
+            });
+        });
+
+        CM.loadMe().then(loadOverview).catch(function () {
+        });
+    });
+</script>
+</body>
+</html>

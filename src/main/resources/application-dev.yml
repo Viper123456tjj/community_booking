@@ -1,0 +1,84 @@
+# =====================================================================
+# 开发环境（dev）：本机 Windows 调试配置
+# 启动方式：默认即为 dev，直接运行 CommunityApplication 即可
+# 端口 9092：避开同工作区其他项目占用的 9090 / 9091
+# =====================================================================
+server:
+  port: 9092
+  servlet:
+    context-path: /
+
+spring:
+  # 本机 MySQL 8.0 数据源
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/community_booking?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: 123456
+    hikari:
+      minimum-idle: 2
+      maximum-pool-size: 10
+      connection-timeout: 10000
+
+  # 本机 Redis
+  redis:
+    host: localhost
+    port: 6379
+    database: 0
+    timeout: 5000ms
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 4
+        min-idle: 1
+
+  # 本机 RabbitMQ（重点修改区域）
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    virtual-host: /
+    # 连接超时收紧到 2 秒：本机未装 RabbitMQ 时快速失败并降级，不让请求长时间挂起
+    connection-timeout: 2000ms
+    # 注意：此处**不能**写 dynamic=false。Spring Boot 的 RabbitAutoConfiguration 只有
+    # 在 spring.rabbitmq.dynamic=true（默认）时才注册 RabbitAdmin，而 RabbitMQConfig 里的
+    # 三交换机/七队列/七绑定全靠 RabbitAdmin 在连接建立后自动声明。一旦置 false，
+    # 拓扑永远不会被创建，消费者启动即报 404 NOT_FOUND，且看不出任何配置错误痕迹。
+    listener:
+      simple:
+        auto-startup: false   # 关键：禁止后台自动启动消费者（消费者仍需 RabbitAdmin 建队列）
+        missing-queues-fatal: false
+
+  # 开发邮件
+  mail:
+    host: smtp.qq.com
+    port: 465
+    username: dev_sender@qq.com
+    password: dev_auth_code
+    default-encoding: UTF-8
+
+# 开发环境附件落盘目录
+community:
+  upload:
+    dir: ./upload
+  mail:
+    sender: dev_sender@qq.com
+    # 本机通常无可用 SMTP：仅日志模拟投递，消费者照常 ACK，不会把消息堆进死信队列
+    enabled: false
+  mq:
+    # 消费者默认不自动启动（见 spring.rabbitmq.listener.simple.auto-startup），
+    # 评价绩效重算因此在事务内同步兜底，保证调试期师傅评分仍实时更新。
+    # 需要联调 MQ 时以 --spring.rabbitmq.listener.simple.auto-startup=true 启动，
+    # 此时异步重算与同步兜底并存（重算幂等，重复执行结果一致）
+    eval-sync-fallback: true
+    # 投递开关：本机未部署 RabbitMQ 时置 false，避免下单/派单等写操作每次
+    # 都等一次连接超时（连接超时已在下方 spring.rabbitmq.connection-timeout 收紧到 2 秒）；
+    # 联调 MQ 时改 true（或用 --community.mq.publish-enabled=true 覆盖）
+    publish-enabled: false
+
+# 开发日志
+logging:
+  level:
+    com.community.booking: debug
+    com.community.booking.mapper: debug
